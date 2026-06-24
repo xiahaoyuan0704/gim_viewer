@@ -161,6 +161,41 @@ function modelsAfterCount(entries: KeyValueEntry[], countKey: string, valuePrefi
   return out;
 }
 
+function attrNum(el: Element, name: string, fallback: number): number {
+  const value = Number(el.getAttribute(name));
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function pipeGeometry(outerRadius: number, innerRadius: number, height: number): THREE.BufferGeometry {
+  const shape = new THREE.Shape();
+  shape.absarc(0, 0, outerRadius, 0, Math.PI * 2, false);
+  if (innerRadius > 0 && innerRadius < outerRadius) {
+    const hole = new THREE.Path();
+    hole.absarc(0, 0, innerRadius, 0, Math.PI * 2, true);
+    shape.holes.push(hole);
+  }
+  return new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false, curveSegments: 48 });
+}
+
+function wireGeometry(wire: Element): THREE.BufferGeometry | null {
+  const start = nums(wire.getAttribute('StartCoord'));
+  const end = nums(wire.getAttribute('EndCoord'));
+  if (start.length < 3 || end.length < 3) return null;
+  const a = new THREE.Vector3(start[0], start[1], start[2]);
+  const b = new THREE.Vector3(end[0], end[1], end[2]);
+  const dir = new THREE.Vector3().subVectors(b, a);
+  const length = dir.length();
+  if (length <= 1e-6) return null;
+  const radius = attrNum(wire, 'D', 2) / 2;
+  const geo = new THREE.CylinderGeometry(radius, radius, length, 8);
+  geo.rotateX(Math.PI / 2);
+  const center = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5);
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir.normalize());
+  geo.applyMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(q));
+  geo.translate(center.x, center.y, center.z);
+  return geo;
+}
+
 function geometryFromEntity(entity: Element): THREE.BufferGeometry | null {
   const cuboid = childByTag(entity, 'Cuboid');
   if (cuboid) {
@@ -192,6 +227,78 @@ function geometryFromEntity(entity: Element): THREE.BufferGeometry | null {
     geo.rotateX(Math.PI / 2);
     return geo;
   }
+
+  const ring = childByTag(entity, 'Ring');
+  if (ring) {
+    const major = attrNum(ring, 'R', 1) + attrNum(ring, 'DR', 0.2);
+    const tube = Math.max(attrNum(ring, 'DR', 0.2), 0.001);
+    const arc = attrNum(ring, 'Rad', Math.PI * 2);
+    const geo = new THREE.TorusGeometry(major, tube, 12, 48, arc > 0 ? arc : Math.PI * 2);
+    geo.rotateX(Math.PI / 2);
+    return geo;
+  }
+
+  const cone = childByTag(entity, 'TruncatedCone');
+  if (cone) {
+    const geo = new THREE.CylinderGeometry(attrNum(cone, 'TR', 1), attrNum(cone, 'BR', 1), attrNum(cone, 'H', 1), 48);
+    geo.rotateX(Math.PI / 2);
+    return geo;
+  }
+
+  const sphere = childByTag(entity, 'Sphere');
+  if (sphere) return new THREE.SphereGeometry(attrNum(sphere, 'R', 1), 32, 16);
+
+  const gasket = childByTag(entity, 'CircularGasket');
+  if (gasket) {
+    return pipeGeometry(attrNum(gasket, 'OR', 1), attrNum(gasket, 'IR', 0.5), attrNum(gasket, 'H', 0.1));
+  }
+
+  const ellipsoid = childByTag(entity, 'RotationalEllipsoid');
+  if (ellipsoid) {
+    const geo = new THREE.SphereGeometry(1, 32, 16);
+    geo.scale(attrNum(ellipsoid, 'LR', 1), attrNum(ellipsoid, 'WR', 1), attrNum(ellipsoid, 'H', 1));
+    return geo;
+  }
+
+  const wire = childByTag(entity, 'Wire');
+  if (wire) return wireGeometry(wire);
+
+  const insulator = childByTag(entity, 'Insulator');
+  if (insulator) {
+    const radius = Math.max(attrNum(insulator, 'R', 1), attrNum(insulator, 'R1', 1), attrNum(insulator, 'R2', 1));
+    const height = Math.max(attrNum(insulator, 'H1', 1) * Math.max(attrNum(insulator, 'N1', 1), 1), attrNum(insulator, 'D', 1));
+    const geo = new THREE.CylinderGeometry(radius, radius, height, 32);
+    geo.rotateX(Math.PI / 2);
+    return geo;
+  }
+
+  const terminal = childByTag(entity, 'TerminalBlock');
+  if (terminal) {
+    return new THREE.BoxGeometry(attrNum(terminal, 'L', 1), attrNum(terminal, 'W', 1), attrNum(terminal, 'T', attrNum(terminal, 'H', 1)));
+  }
+
+  const offsetTable = childByTag(entity, 'OffsetRectangularTable');
+  if (offsetTable) {
+    return new THREE.BoxGeometry(attrNum(offsetTable, 'LL', attrNum(offsetTable, 'TL', 1)), attrNum(offsetTable, 'LW', attrNum(offsetTable, 'TW', 1)), attrNum(offsetTable, 'H', 1));
+  }
+
+  const roundTube = childByTag(entity, 'RoundSteelTube');
+  if (roundTube) {
+    const r = attrNum(roundTube, 'R', attrNum(roundTube, 'OR', attrNum(roundTube, 'D', 2) / 2));
+    const inner = attrNum(roundTube, 'IR', Math.max(0, r - attrNum(roundTube, 'T', r * 0.2)));
+    return pipeGeometry(r, inner, attrNum(roundTube, 'L', attrNum(roundTube, 'H', 1)));
+  }
+
+  const angleSteel = childByTag(entity, 'EquilateralAngleSteel');
+  if (angleSteel) {
+    const l = attrNum(angleSteel, 'L', 1);
+    const w = attrNum(angleSteel, 'W', attrNum(angleSteel, 'B', 1));
+    const t = attrNum(angleSteel, 'T', w * 0.1);
+    return new THREE.BoxGeometry(l, w, t);
+  }
+
+  const flatSteel = childByTag(entity, 'FlatSteel');
+  if (flatSteel) return new THREE.BoxGeometry(attrNum(flatSteel, 'L', 1), attrNum(flatSteel, 'W', 1), attrNum(flatSteel, 'T', 1));
 
   const stretched = childByTag(entity, 'StretchedBody');
   if (stretched) {
@@ -415,6 +522,24 @@ export async function loadGimGeometryModel(ctx: ViewerContext, state: AppState, 
       if (dev.children.length === 0) continue;
       dev.name = devPath.split('/').pop() || devPath;
       root.add(dev);
+    }
+  }
+
+  if (root.children.length === 0) {
+    for (const phmPath of refsInFolder(buildCtx, 'PHM', '.phm')) {
+      const phm = await buildPhm(phmPath, buildCtx);
+      if (phm.children.length === 0) continue;
+      phm.name = phmPath.split('/').pop() || phmPath;
+      root.add(phm);
+    }
+  }
+
+  if (root.children.length === 0) {
+    for (const modPath of refsInFolder(buildCtx, 'MOD', '.mod')) {
+      const mod = await buildMod(modPath, buildCtx);
+      if (mod.children.length === 0) continue;
+      mod.name = modPath.split('/').pop() || modPath;
+      root.add(mod);
     }
   }
 
