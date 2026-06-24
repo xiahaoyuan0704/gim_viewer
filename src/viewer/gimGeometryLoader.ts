@@ -222,6 +222,67 @@ function wireGeometry(wire: Element): THREE.BufferGeometry | null {
   return geo;
 }
 
+function parsePointList(value: string | null): THREE.Vector3[] {
+  return (value || '').split(';')
+    .map((part) => nums(part))
+    .filter((part) => part.length >= 3)
+    .map((part) => new THREE.Vector3(part[0], part[1], part[2]));
+}
+
+function polygonNormal(points: THREE.Vector3[]): THREE.Vector3 {
+  const normal = new THREE.Vector3();
+  for (let i = 0; i < points.length; i++) {
+    const current = points[i];
+    const next = points[(i + 1) % points.length];
+    normal.x += (current.y - next.y) * (current.z + next.z);
+    normal.y += (current.z - next.z) * (current.x + next.x);
+    normal.z += (current.x - next.x) * (current.y + next.y);
+  }
+  return normal.lengthSq() > 1e-12 ? normal.normalize() : new THREE.Vector3(0, 0, 1);
+}
+
+function stretchedBodyGeometry(stretched: Element): THREE.BufferGeometry | null {
+  const points = parsePointList(stretched.getAttribute('Array'));
+  if (points.length < 3) return null;
+  const normalValues = nums(stretched.getAttribute('Normal'));
+  const normal = normalValues.length >= 3 ? new THREE.Vector3(normalValues[0], normalValues[1], normalValues[2]) : polygonNormal(points);
+  if (normal.lengthSq() <= 1e-12) normal.copy(polygonNormal(points));
+  normal.normalize();
+  const length = attrNum(stretched, 'L', 1);
+  const extrusion = normal.clone().multiplyScalar(length);
+
+  const basisX = new THREE.Vector3().subVectors(points[1], points[0]);
+  if (basisX.lengthSq() <= 1e-12) return null;
+  basisX.normalize();
+  const basisY = new THREE.Vector3().crossVectors(normal, basisX).normalize();
+  if (basisY.lengthSq() <= 1e-12) return null;
+  const points2d = points.map((point) => new THREE.Vector2(point.dot(basisX), point.dot(basisY)));
+  const triangles = THREE.ShapeUtils.triangulateShape(points2d, []);
+  if (triangles.length === 0) return null;
+
+  const vertices: number[] = [];
+  const indices: number[] = [];
+  for (const point of points) vertices.push(point.x, point.y, point.z);
+  for (const point of points) {
+    const back = point.clone().add(extrusion);
+    vertices.push(back.x, back.y, back.z);
+  }
+
+  for (const tri of triangles) indices.push(tri[0], tri[1], tri[2]);
+  const offset = points.length;
+  for (const tri of triangles) indices.push(offset + tri[2], offset + tri[1], offset + tri[0]);
+  for (let i = 0; i < points.length; i++) {
+    const next = (i + 1) % points.length;
+    indices.push(i, next, offset + next, i, offset + next, offset + i);
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
 function geometryFromEntity(entity: Element): THREE.BufferGeometry | null {
   const cuboid = childByTag(entity, 'Cuboid');
   if (cuboid) {
@@ -327,15 +388,7 @@ function geometryFromEntity(entity: Element): THREE.BufferGeometry | null {
   if (flatSteel) return new THREE.BoxGeometry(attrNum(flatSteel, 'L', 1), attrNum(flatSteel, 'W', 1), attrNum(flatSteel, 'T', 1));
 
   const stretched = childByTag(entity, 'StretchedBody');
-  if (stretched) {
-    const points = (stretched.getAttribute('Array') || '').split(';')
-      .map((p) => nums(p)).filter((p) => p.length >= 2)
-      .map((p) => new THREE.Vector2(p[0], p[1]));
-    if (points.length >= 3) {
-      const shape = new THREE.Shape(points);
-      return new THREE.ExtrudeGeometry(shape, { depth: Number(stretched.getAttribute('L') || 1), bevelEnabled: false });
-    }
-  }
+  if (stretched) return stretchedBodyGeometry(stretched);
 
   return null;
 }
