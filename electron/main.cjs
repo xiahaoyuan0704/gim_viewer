@@ -27,7 +27,9 @@ function createMainWindow() {
 
   if (isDev) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
-    win.webContents.openDevTools({ mode: 'detach' });
+    if (process.env.ELECTRON_OPEN_DEVTOOLS === '1') {
+      win.webContents.openDevTools({ mode: 'detach' });
+    }
   } else {
     win.loadFile(path.join(__dirname, '../dist/index.html'));
   }

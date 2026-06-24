@@ -1,22 +1,61 @@
-# GIM 阅读器
+# GIM 阅读器桌面软件
 
-基于 Web 的 GIM（Grid Information Model，电网信息模型）文件浏览器，支持从 `.gim` 压缩包中提取并可视化 IFC 模型。
+GIM 阅读器是用于查看 GIM（Grid Information Model，电网信息模型）文件的桌面软件。软件基于 Electron 承载现有 3D 渲染与 GIM/IFC 解析能力，打开后就是独立窗口，不需要用户手动打开浏览器。
 
 ![alt text](static/image.png)
 
 ## 技术栈
 
+- **桌面外壳**：Electron
 - **3D 渲染**：[That Open](https://thatopen.com/) + [web-ifc](https://ifcjs.github.io/ifcjs-crash-course/) + Three.js
 - **压缩包解压**：[libarchive.js](https://github.com/nika-begiashvili/libarchivejs)（WebAssembly，支持 7z/ZIP/RAR 等）
-- **构建工具**：Vite + TypeScript
+- **渲染构建**：Vite + TypeScript
 
 ## 功能
 
-- 打开 `.gim` 文件，自动检测 GIMPKGS 头部并解压内部 7z/ZIP 数据
-- 通过 CBM 层级结构发现 IFC 文件，或直接扫描 DEV 目录
-- 选择性加载 IFC 文件（全选/取消/勾选指定文件）
-- 已加载模型的显示/隐藏切换
-- 加载本地 IFC 文件
+- 打开 `.gim` 文件，自动检测 GIMPKGS 头部并解压内部 7z/ZIP 数据。
+- 通过 CBM 层级结构发现 IFC 文件，或直接扫描 DEV 目录。
+- 选择性加载 IFC 文件（全选、取消全选、勾选指定文件）。
+- 浏览 CBM 层级树和文件设备关系。
+- 显示/隐藏已加载模型。
+- 直接打开本地 IFC 文件。
+- 3D 点击拾取构件、高亮构件、展示 IFC/GIM 属性。
+- 原生菜单支持打开 GIM、打开 IFC、清空场景等操作。
+
+## 快速开始
+
+第一次运行：
+
+```bash
+npm install
+npm run dev
+```
+
+之后日常启动软件：
+
+```bash
+npm run dev
+```
+
+`npm run dev` 会自动启动本地渲染服务并打开 Electron 桌面窗口。
+
+## 打包软件
+
+生成安装包或平台产物：
+
+```bash
+npm run build
+```
+
+产物输出到 `release/` 目录。
+
+生成未压缩的软件目录，便于本机快速验证：
+
+```bash
+npm run pack
+```
+
+更多桌面端说明见 [README_DESKTOP.md](README_DESKTOP.md)。
 
 ## GIM 文件格式
 
@@ -41,40 +80,21 @@
 
 详细格式说明见 [doc/schema/](doc/schema/)，Demo 工程分析见 [doc/gim_spec.md](doc/gim_spec.md)。
 
-## 快速开始
-
-```bash
-# 安装依赖
-npm install
-
-# 启动开发服务器
-npm run dev
-
-# 构建生产版本
-npm run build
-```
-
 ## 项目结构
 
 ```
 gim_viewer/
-├── public/                  # 静态资源
+├── electron/                # Electron 主进程与 preload
+├── public/                  # 静态资源与 WASM
 │   ├── worker-bundle.js     # libarchive.js Worker
-│   └── libarchive.wasm      # libarchive WASM
-├── src/
-│   └── main.ts              # 应用入口
-├── doc/
-│   ├── gim_spec.md           # Demo GIM 工程分析
-│   └── schema/               # 各文件格式说明
-│       ├── cbm.md
-│       ├── dev.md
-│       ├── fam.md
-│       ├── mod.md
-│       ├── phm.md
-│       ├── sch.md
-│       ├── sld.md
-│       └── std.md
-├── index.html
+│   ├── libarchive.wasm      # libarchive WASM
+│   ├── web-ifc.wasm         # web-ifc WASM
+│   └── web-ifc-mt.wasm      # web-ifc 多线程 WASM
+├── scripts/
+│   └── desktop-dev.cjs      # 一键启动本地服务与 Electron 窗口
+├── src/                     # 渲染进程业务代码
+├── doc/                     # GIM/CBM/DEV/FAM 等格式说明
+├── index.html               # Electron 渲染界面入口
 ├── vite.config.ts
 ├── tsconfig.json
 └── package.json
