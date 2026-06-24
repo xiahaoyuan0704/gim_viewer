@@ -13,7 +13,7 @@ GIM 阅读器是用于查看 GIM（Grid Information Model，电网信息模型�
 
 ## 功能
 
-- 打开 `.gim` 文件，自动检测 GIMPKGS 头部并解压内部 7z/ZIP 数据。
+- 打开 `.gim` 文件，自动检测 GIMPKGS 头部并解压内部 7z/ZIP 数据；即使 GIM 中没有 IFC，也会尝试通过 DEV/PHM/MOD 原生几何渲染。
 - 通过 CBM 层级结构发现 IFC 文件，或直接扫描 DEV 目录。
 - 选择性加载 IFC 文件（全选、取消全选、勾选指定文件）。
 - 浏览 CBM 层级树和文件设备关系。

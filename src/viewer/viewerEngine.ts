@@ -7,6 +7,7 @@ export interface ViewerContext {
   world: OBC.World;
   ifcLoader: OBC.IfcLoader;
   fragments: OBC.FragmentsManager;
+  gimModels: Map<string, THREE.Object3D>;
 }
 
 /** 初始化 OBC 引擎并返回上下文 */
@@ -25,5 +26,5 @@ export function createViewerEngine(container: HTMLElement): ViewerContext {
   const ifcLoader = components.get(OBC.IfcLoader);
   const fragments = components.get(OBC.FragmentsManager);
 
-  return { components, world, ifcLoader, fragments };
+  return { components, world, ifcLoader, fragments, gimModels: new Map() };
 }

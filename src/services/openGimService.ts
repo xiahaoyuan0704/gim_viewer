@@ -7,6 +7,7 @@ import { buildCbmTree, buildCbmNodeIndex } from '../gim/cbmParser.js';
 import { parseFileDevRelation } from '../gim/fileDevParser.js';
 import { ensureEngineReady, loadIfcBuffer } from '../viewer/ifcLoader.js';
 import { buildIfcNameIndex } from '../viewer/ifcNameIndex.js';
+import { loadGimGeometryModel } from '../viewer/gimGeometryLoader.js';
 import { fitCameraToScene } from '../viewer/camera.js';
 import { openIfcModal, getModalSelectedEntries, closeIfcModal } from '../ui/ifcSelectModal.js';
 import { buildAndRenderCbmTree } from '../ui/cbmTreeView.js';
@@ -78,7 +79,7 @@ export async function loadSelectedIfcFiles(ctx: ViewerContext, state: AppState, 
 }
 
 /** 绑定 GIM 文件打开事件 */
-export function setupOpenGimService(ctx: ViewerContext, state: AppState, showMessage: (text: string) => void): void {
+export function setupOpenGimService(ctx: ViewerContext, state: AppState, showMessage: (text: string) => void, modelCallbacks: ModelEventCallbacks): void {
   btnLoadGim.addEventListener('click', () => gimFileInput.click());
   gimFileInput.addEventListener('change', async () => {
     const files = Array.from(gimFileInput.files || []);
@@ -91,7 +92,16 @@ export function setupOpenGimService(ctx: ViewerContext, state: AppState, showMes
       const ab = await files[0].arrayBuffer();
       const extracted = await extractGimFile(ab);
       const entries = await onGimExtracted(ctx, state, extracted, showMessage);
-      if (entries.length === 0) { showLoading('未在 GIM 文件中找到 IFC 文件'); setTimeout(hideLoading, 2000); return; }
+      if (entries.length === 0) {
+        showLoading('未找到 IFC，正在加载 GIM 原生几何...');
+        const modelId = await loadGimGeometryModel(ctx, state, extracted);
+        if (!modelId) { showLoading('未在 GIM 文件中找到可渲染的 IFC 或 MOD/PHM/DEV 几何'); setTimeout(hideLoading, 3000); return; }
+        modelCallbacks.onModelAdded(modelId);
+        emptyTipEl.style.display = 'none';
+        fitCameraToScene(ctx, state);
+        hideLoading();
+        return;
+      }
       hideLoading();
       openIfcModal(entries);
     } catch (err) {
