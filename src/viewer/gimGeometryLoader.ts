@@ -8,10 +8,54 @@ const IDENTITY = '1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1';
 
 type BuildContext = {
   files: Map<string, File>;
+  pathIndex: Map<string, string>;
   modCache: Map<string, Promise<THREE.Object3D>>;
   phmCache: Map<string, Promise<THREE.Object3D>>;
   devCache: Map<string, Promise<THREE.Object3D>>;
+  stlCache: Map<string, Promise<THREE.Object3D>>;
 };
+
+function normalizePath(path: string): string { return path.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase(); }
+
+function makePathIndex(files: Map<string, File>): Map<string, string> {
+  const index = new Map<string, string>();
+  for (const path of files.keys()) index.set(normalizePath(path), path);
+  return index;
+}
+
+function resolvePath(ctx: BuildContext, wanted: string): string | null {
+  const exact = ctx.pathIndex.get(normalizePath(wanted));
+  if (exact) return exact;
+  const normalized = normalizePath(wanted);
+  const parts = normalized.split('/');
+  const folder = parts[parts.length - 2];
+  const fileName = parts[parts.length - 1];
+  if (!folder || !fileName) return null;
+  for (const [key, original] of ctx.pathIndex) {
+    const p = key.split('/');
+    if (p[p.length - 2] === folder && p[p.length - 1] === fileName) return original;
+  }
+  for (const [key, original] of ctx.pathIndex) {
+    if (key.endsWith(`/${folder}/${fileName}`) || key.endsWith(`/${fileName}`)) return original;
+  }
+  return null;
+}
+
+function refsInFolder(ctx: BuildContext, folder: string, ext: string): string[] {
+  const result: string[] = [];
+  const folderLower = folder.toLowerCase();
+  const extLower = ext.toLowerCase();
+  for (const [key, original] of ctx.pathIndex) {
+    const parts = key.split('/');
+    if (parts[parts.length - 2] === folderLower && key.endsWith(extLower)) result.push(original);
+  }
+  return result.sort((a, b) => a.localeCompare(b));
+}
+
+function childByTag(entity: Element, tagName: string): Element | null {
+  const lower = tagName.toLowerCase();
+  return Array.from(entity.children).find((child) => child.tagName.toLowerCase() === lower) ?? null;
+}
 
 function nums(value: string | null | undefined): number[] {
   return (value || '').split(/[;,\s]+/).map((v) => Number(v)).filter((v) => Number.isFinite(v));
@@ -52,7 +96,7 @@ function colorMaterial(colorEl?: Element | null, override?: string): THREE.Mater
 }
 
 function geometryFromEntity(entity: Element): THREE.BufferGeometry | null {
-  const cuboid = entity.querySelector('Cuboid');
+  const cuboid = childByTag(entity, 'Cuboid');
   if (cuboid) {
     return new THREE.BoxGeometry(
       Number(cuboid.getAttribute('L') || 1),
@@ -61,7 +105,7 @@ function geometryFromEntity(entity: Element): THREE.BufferGeometry | null {
     );
   }
 
-  const cylinder = entity.querySelector('Cylinder');
+  const cylinder = childByTag(entity, 'Cylinder');
   if (cylinder) {
     const geo = new THREE.CylinderGeometry(
       Number(cylinder.getAttribute('R') || 1),
@@ -73,7 +117,7 @@ function geometryFromEntity(entity: Element): THREE.BufferGeometry | null {
     return geo;
   }
 
-  const bushing = entity.querySelector('PorcelainBushing');
+  const bushing = childByTag(entity, 'PorcelainBushing');
   if (bushing) {
     const r = Number(bushing.getAttribute('R') || 20);
     const r1 = Number(bushing.getAttribute('R1') || r * 1.3);
@@ -83,7 +127,7 @@ function geometryFromEntity(entity: Element): THREE.BufferGeometry | null {
     return geo;
   }
 
-  const stretched = entity.querySelector('StretchedBody');
+  const stretched = childByTag(entity, 'StretchedBody');
   if (stretched) {
     const points = (stretched.getAttribute('Array') || '').split(';')
       .map((p) => nums(p)).filter((p) => p.length >= 2)
@@ -97,9 +141,78 @@ function geometryFromEntity(entity: Element): THREE.BufferGeometry | null {
   return null;
 }
 
-async function loadText(files: Map<string, File>, path: string): Promise<string | null> {
-  const file = files.get(path);
+async function loadText(ctx: BuildContext, path: string): Promise<string | null> {
+  const resolved = resolvePath(ctx, path);
+  const file = resolved ? ctx.files.get(resolved) : null;
   return file ? file.text() : null;
+}
+
+async function loadBuffer(ctx: BuildContext, path: string): Promise<ArrayBuffer | null> {
+  const resolved = resolvePath(ctx, path);
+  const file = resolved ? ctx.files.get(resolved) : null;
+  return file ? file.arrayBuffer() : null;
+}
+
+function parseAsciiStl(text: string): THREE.BufferGeometry | null {
+  const vertices: number[] = [];
+  for (const match of text.matchAll(/vertex\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)/g)) {
+    vertices.push(Number(match[1]), Number(match[2]), Number(match[3]));
+  }
+  if (vertices.length < 9) return null;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function parseBinaryStl(buffer: ArrayBuffer): THREE.BufferGeometry | null {
+  if (buffer.byteLength < 84) return null;
+  const view = new DataView(buffer);
+  const triangles = view.getUint32(80, true);
+  if (84 + triangles * 50 > buffer.byteLength) return null;
+  const vertices = new Float32Array(triangles * 9);
+  let offset = 84;
+  let out = 0;
+  for (let i = 0; i < triangles; i++) {
+    offset += 12; // normal
+    for (let v = 0; v < 3; v++) {
+      vertices[out++] = view.getFloat32(offset, true); offset += 4;
+      vertices[out++] = view.getFloat32(offset, true); offset += 4;
+      vertices[out++] = view.getFloat32(offset, true); offset += 4;
+    }
+    offset += 2;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+async function buildStl(path: string, ctx: BuildContext, overrideColor?: string): Promise<THREE.Object3D> {
+  const cached = ctx.stlCache.get(`${path}|${overrideColor || ''}`);
+  if (cached) return (await cached).clone(true);
+
+  const promise = (async () => {
+    const group = new THREE.Group();
+    group.name = path;
+    const buffer = await loadBuffer(ctx, path);
+    if (!buffer) return group;
+    const header = new TextDecoder().decode(buffer.slice(0, Math.min(buffer.byteLength, 256)));
+    const geo = header.trimStart().startsWith('solid') ? parseAsciiStl(new TextDecoder().decode(buffer)) ?? parseBinaryStl(buffer) : parseBinaryStl(buffer);
+    if (!geo) return group;
+    group.add(new THREE.Mesh(geo, colorMaterial(null, overrideColor)));
+    return group;
+  })();
+
+  ctx.stlCache.set(`${path}|${overrideColor || ''}`, promise);
+  return (await promise).clone(true);
+}
+
+async function buildSolidRef(ref: string, ctx: BuildContext, overrideColor?: string): Promise<THREE.Object3D | null> {
+  if (/\.mod$/i.test(ref)) return buildMod(`MOD/${ref}`, ctx, overrideColor);
+  if (/\.phm$/i.test(ref)) return buildPhm(`PHM/${ref}`, ctx);
+  if (/\.stl$/i.test(ref)) return buildStl(`MOD/${ref}`, ctx, overrideColor);
+  return null;
 }
 
 async function buildMod(path: string, ctx: BuildContext, overrideColor?: string): Promise<THREE.Object3D> {
@@ -107,20 +220,21 @@ async function buildMod(path: string, ctx: BuildContext, overrideColor?: string)
   if (cached) return (await cached).clone(true);
 
   const promise = (async () => {
-    const text = await loadText(ctx.files, path);
+    const text = await loadText(ctx, path);
     const group = new THREE.Group();
     group.name = path;
     if (!text) return group;
 
     const doc = new DOMParser().parseFromString(text, 'application/xml');
-    for (const entity of Array.from(doc.querySelectorAll('Entity'))) {
+    const entities = Array.from(doc.getElementsByTagName('*')).filter((el) => el.tagName.toLowerCase() === 'entity');
+    for (const entity of entities) {
       if ((entity.getAttribute('Visible') || 'True').toLowerCase() === 'false') continue;
       const geo = geometryFromEntity(entity);
       if (!geo) continue;
-      const mat = colorMaterial(entity.querySelector('Color'), overrideColor);
+      const mat = colorMaterial(childByTag(entity, 'Color'), overrideColor);
       const mesh = new THREE.Mesh(geo, mat);
       mesh.name = `${path}#${entity.getAttribute('ID') || ''}`;
-      mesh.applyMatrix4(matrixFromString(entity.querySelector('TransformMatrix')?.getAttribute('Value')));
+      mesh.applyMatrix4(matrixFromString(childByTag(entity, 'TransformMatrix')?.getAttribute('Value')));
       group.add(mesh);
     }
     return group;
@@ -135,7 +249,7 @@ async function buildPhm(path: string, ctx: BuildContext): Promise<THREE.Object3D
   if (cached) return (await cached).clone(true);
 
   const promise = (async () => {
-    const text = await loadText(ctx.files, path);
+    const text = await loadText(ctx, path);
     const group = new THREE.Group();
     group.name = path;
     if (!text) return group;
@@ -145,9 +259,7 @@ async function buildPhm(path: string, ctx: BuildContext): Promise<THREE.Object3D
     for (let i = 0; i < count; i++) {
       const ref = kv[`SOLIDMODEL${i}`];
       if (!ref) continue;
-      let child: THREE.Object3D | null = null;
-      if (/\.mod$/i.test(ref)) child = await buildMod(`MOD/${ref}`, ctx, kv[`COLOR${i}`]);
-      else if (/\.phm$/i.test(ref)) child = await buildPhm(`PHM/${ref}`, ctx);
+      const child = await buildSolidRef(ref, ctx, kv[`COLOR${i}`]);
       if (!child) continue;
       child.applyMatrix4(matrixFromString(kv[`TRANSFORMMATRIX${i}`]));
       group.add(child);
@@ -164,7 +276,7 @@ async function buildDev(path: string, ctx: BuildContext): Promise<THREE.Object3D
   if (cached) return (await cached).clone(true);
 
   const promise = (async () => {
-    const text = await loadText(ctx.files, path);
+    const text = await loadText(ctx, path);
     const group = new THREE.Group();
     group.name = path;
     if (!text) return group;
@@ -174,7 +286,8 @@ async function buildDev(path: string, ctx: BuildContext): Promise<THREE.Object3D
     for (let i = 0; i < solidCount; i++) {
       const ref = kv[`SOLIDMODEL${i}`];
       if (!ref) continue;
-      const child = await buildPhm(`PHM/${ref}`, ctx);
+      const child = await buildSolidRef(ref, ctx);
+      if (!child) continue;
       child.applyMatrix4(matrixFromString(kv[`TRANSFORMMATRIX${i}`]));
       group.add(child);
     }
@@ -202,15 +315,29 @@ function collectDeviceNodes(node: CbmNode | null, out: CbmNode[] = []): CbmNode[
 export async function loadGimGeometryModel(ctx: ViewerContext, state: AppState, files: Map<string, File>): Promise<string | null> {
   const root = new THREE.Group();
   root.name = 'GIM 几何模型';
-  const buildCtx: BuildContext = { files, modCache: new Map(), phmCache: new Map(), devCache: new Map() };
+  const buildCtx: BuildContext = { files, pathIndex: makePathIndex(files), modCache: new Map(), phmCache: new Map(), devCache: new Map(), stlCache: new Map() };
   const nodes = collectDeviceNodes(state.currentCbmTree);
 
-  for (const node of nodes) {
-    const dev = await buildDev(`DEV/${node.devPath}`, buildCtx);
-    if (dev.children.length === 0) continue;
-    dev.name = node.name;
-    dev.applyMatrix4(matrixFromString(node.transformMatrix));
-    root.add(dev);
+  if (nodes.length > 0) {
+    for (const node of nodes) {
+      const dev = await buildDev(`DEV/${node.devPath}`, buildCtx);
+      if (dev.children.length === 0) continue;
+      dev.name = node.name;
+      dev.applyMatrix4(matrixFromString(node.transformMatrix));
+      root.add(dev);
+    }
+  }
+
+  // Some GIM variants, especially line projects, use CBM hierarchy keys that are not
+  // part of the common substation subset. If the CBM walk did not produce renderable
+  // device nodes, fall back to rendering every DEV model found in the package.
+  if (root.children.length === 0) {
+    for (const devPath of refsInFolder(buildCtx, 'DEV', '.dev')) {
+      const dev = await buildDev(devPath, buildCtx);
+      if (dev.children.length === 0) continue;
+      dev.name = devPath.split('/').pop() || devPath;
+      root.add(dev);
+    }
   }
 
   if (root.children.length === 0) return null;
