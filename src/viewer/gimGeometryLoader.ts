@@ -52,6 +52,24 @@ function refsInFolder(ctx: BuildContext, folder: string, ext: string): string[] 
   return result.sort((a, b) => a.localeCompare(b));
 }
 
+function fileNameOf(path: string): string { return normalizePath(path).split('/').pop() || ''; }
+
+function entryKeyStartsWith(entry: KeyValueEntry | undefined, prefix: string): boolean {
+  return !!entry && entry.key.toUpperCase().startsWith(prefix.toUpperCase());
+}
+
+async function collectRootDevPaths(ctx: BuildContext): Promise<string[]> {
+  const devPaths = refsInFolder(ctx, 'DEV', '.dev');
+  const referenced = new Set<string>();
+  for (const devPath of devPaths) {
+    const text = await loadText(ctx, devPath);
+    if (!text) continue;
+    for (const { ref } of modelsAfterCount(parseKeyValueEntries(text), 'SUBDEVICES.NUM', 'SUBDEVICE', 2)) referenced.add(fileNameOf(ref));
+  }
+  const roots = devPaths.filter((devPath) => !referenced.has(fileNameOf(devPath)));
+  return roots.length > 0 ? roots : devPaths;
+}
+
 function childByTag(entity: Element, tagName: string): Element | null {
   const lower = tagName.toLowerCase();
   return Array.from(entity.children).find((child) => child.tagName.toLowerCase() === lower) ?? null;
@@ -61,9 +79,29 @@ function nums(value: string | null | undefined): number[] {
   return (value || '').split(/[;,\s]+/).map((v) => Number(v)).filter((v) => Number.isFinite(v));
 }
 
-function signedScale(axis: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3): number {
-  const sign = Math.sign(new THREE.Vector3().crossVectors(a, b).dot(axis)) || 1;
-  return axis.length() * sign;
+function matrixFromValues(values: number[], columnMajor: boolean): THREE.Matrix4 {
+  const matrix = new THREE.Matrix4();
+  if (columnMajor) {
+    matrix.fromArray(values);
+  } else {
+    matrix.set(
+      values[0], values[1], values[2], values[3],
+      values[4], values[5], values[6], values[7],
+      values[8], values[9], values[10], values[11],
+      values[12], values[13], values[14], values[15],
+    );
+  }
+  return matrix;
+}
+
+function decomposeGimMatrix(values: number[], columnMajor: boolean): { position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 } | null {
+  const matrix = matrixFromValues(values, columnMajor);
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  matrix.decompose(position, quaternion, scale);
+  if (![position.x, position.y, position.z, quaternion.x, quaternion.y, quaternion.z, quaternion.w, scale.x, scale.y, scale.z].every(Number.isFinite)) return null;
+  return { position, quaternion, scale };
 }
 
 function applyGimTransform(object: THREE.Object3D, value: string | null | undefined): void {
@@ -71,34 +109,19 @@ function applyGimTransform(object: THREE.Object3D, value: string | null | undefi
   const m = n.length >= 16 ? n.slice(0, 16) : nums(IDENTITY);
   const rowTranslation = new THREE.Vector3(m[3], m[7], m[11]);
   const columnTranslation = new THREE.Vector3(m[12], m[13], m[14]);
-  const useColumnMajor = columnTranslation.lengthSq() > 1e-12 && rowTranslation.lengthSq() <= 1e-12;
-
-  const rightRaw = useColumnMajor ? new THREE.Vector3(m[0], m[1], m[2]) : new THREE.Vector3(m[0], m[4], m[8]);
-  const upRaw = useColumnMajor ? new THREE.Vector3(m[4], m[5], m[6]) : new THREE.Vector3(m[1], m[5], m[9]);
-  const forwardRaw = useColumnMajor ? new THREE.Vector3(m[8], m[9], m[10]) : new THREE.Vector3(m[2], m[6], m[10]);
-
-  const sx = signedScale(rightRaw, upRaw, forwardRaw);
-  const sy = signedScale(upRaw, forwardRaw, rightRaw);
-  const sz = signedScale(forwardRaw, rightRaw, upRaw);
-
-  if (Math.abs(sx) < 1e-6 || Math.abs(sy) < 1e-6 || Math.abs(sz) < 1e-6) {
-    object.position.copy(useColumnMajor ? columnTranslation : rowTranslation);
+  const preferColumnMajor = columnTranslation.lengthSq() > 1e-12 && rowTranslation.lengthSq() <= 1e-12;
+  const primary = decomposeGimMatrix(m, preferColumnMajor);
+  const fallback = primary ?? decomposeGimMatrix(m, !preferColumnMajor);
+  if (!fallback) {
+    object.position.copy(preferColumnMajor ? columnTranslation : rowTranslation);
     object.quaternion.identity();
     object.scale.set(1, 1, 1);
     return;
   }
-
-  const forward = forwardRaw.clone().divideScalar(sz).normalize();
-  const up = upRaw.clone().divideScalar(sy);
-  up.addScaledVector(forward, -up.dot(forward)).normalize();
-  const right = new THREE.Vector3().crossVectors(up, forward).normalize();
-
-  const rot = new THREE.Matrix4().makeBasis(right, up, forward);
-  object.position.copy(useColumnMajor ? columnTranslation : rowTranslation);
-  object.quaternion.setFromRotationMatrix(rot);
-  object.scale.set(sx, sy, sz);
+  object.position.copy(fallback.position);
+  object.quaternion.copy(fallback.quaternion);
+  object.scale.copy(fallback.scale);
 }
-
 
 function colorMaterial(colorEl?: Element | null, override?: string): THREE.Material {
   let r = 150; let g = 174; let b = 190; let a = 100;
@@ -155,8 +178,8 @@ function modelsAfterCount(entries: KeyValueEntry[], countKey: string, valuePrefi
     for (let item = 0; item < count && j < entries.length; item++) {
       while (j < entries.length && !entries[j].key.toUpperCase().startsWith(upperPrefix)) j++;
       const ref = entries[j]?.value;
-      const transform = entries[j + 1]?.key.toUpperCase().startsWith('TRANSFORMMATRIX') ? entries[j + 1].value : IDENTITY;
-      const color = stride >= 3 && entries[j + 2]?.key.toUpperCase().startsWith('COLOR') ? entries[j + 2].value : undefined;
+      const transform = entryKeyStartsWith(entries[j + 1], 'TRANSFORMMATRIX') ? entries[j + 1].value : IDENTITY;
+      const color = stride >= 3 && entryKeyStartsWith(entries[j + 2], 'COLOR') ? entries[j + 2].value : undefined;
       if (ref) out.push({ ref, transform, color });
       j += stride;
     }
@@ -518,9 +541,10 @@ export async function loadGimGeometryModel(ctx: ViewerContext, state: AppState, 
 
   // Some GIM variants, especially line projects, use CBM hierarchy keys that are not
   // part of the common substation subset. If the CBM walk did not produce renderable
-  // device nodes, fall back to rendering every DEV model found in the package.
+  // device nodes, fall back to top-level DEV models instead of every nested DEV,
+  // avoiding duplicate child devices that drift the assembled model.
   if (root.children.length === 0) {
-    for (const devPath of refsInFolder(buildCtx, 'DEV', '.dev')) {
+    for (const devPath of await collectRootDevPaths(buildCtx)) {
       const dev = await buildDev(devPath, buildCtx);
       if (dev.children.length === 0) continue;
       dev.name = devPath.split('/').pop() || devPath;
