@@ -57,6 +57,25 @@ npm run pack
 
 更多桌面端说明见 [README_DESKTOP.md](README_DESKTOP.md)。
 
+## 安装失败排查
+
+如果 `npm install` 在安装 Electron 时出现 `RequestError: read ECONNRESET`，通常是 Electron 二进制下载连接被重置。项目根目录已经提供 `.npmrc`，默认配置了 npm 镜像、Electron 镜像和 electron-builder 二进制镜像。
+
+建议重新执行：
+
+```bash
+npm cache verify
+npm install --no-audit --no-fund
+```
+
+Windows PowerShell 如仍失败，可临时指定镜像后重试：
+
+```powershell
+$env:ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
+$env:ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
+npm install --no-audit --no-fund --verbose
+```
+
 ## GIM 文件格式
 
 `.gim` 文件是国家电网的工程信息模型标准格式，本质是自定义头部 + 压缩包：

@@ -51,19 +51,23 @@ npm run pack
 
 ## 常见问题
 
-### 提示找不到 Electron
+### 提示找不到 Electron，或安装 Electron 时 ECONNRESET
 
-请先执行：
+请先关闭当前安装命令，然后在项目根目录重新执行：
 
 ```bash
-npm install
+npm cache verify
+npm install --no-audit --no-fund
 ```
 
-如果 npm 下载较慢，可以切换镜像后重试：
+项目根目录已提供 `.npmrc`，会默认使用 npm 镜像、Electron 镜像和 electron-builder 二进制镜像，避免 Electron 安装脚本直接访问不稳定的默认下载源。
 
-```bash
-npm config set registry https://registry.npmmirror.com
-npm install
+如果仍然失败，可以在 PowerShell 中临时显式指定镜像后重试：
+
+```powershell
+$env:ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
+$env:ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
+npm install --no-audit --no-fund --verbose
 ```
 
 ### 想打开开发者工具
