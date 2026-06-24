@@ -61,16 +61,41 @@ function nums(value: string | null | undefined): number[] {
   return (value || '').split(/[;,\s]+/).map((v) => Number(v)).filter((v) => Number.isFinite(v));
 }
 
-function matrixFromString(value: string | null | undefined): THREE.Matrix4 {
+function signedScale(axis: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3): number {
+  const sign = Math.sign(new THREE.Vector3().crossVectors(a, b).dot(axis)) || 1;
+  return axis.length() * sign;
+}
+
+function applyGimTransform(object: THREE.Object3D, value: string | null | undefined): void {
   const n = nums(value || IDENTITY);
   const m = n.length >= 16 ? n.slice(0, 16) : nums(IDENTITY);
-  return new THREE.Matrix4().set(
-    m[0], m[1], m[2], m[3],
-    m[4], m[5], m[6], m[7],
-    m[8], m[9], m[10], m[11],
-    m[12], m[13], m[14], m[15],
-  );
+
+  const rightRaw = new THREE.Vector3(m[0], m[4], m[8]);
+  const upRaw = new THREE.Vector3(m[1], m[5], m[9]);
+  const forwardRaw = new THREE.Vector3(m[2], m[6], m[10]);
+
+  const sx = signedScale(rightRaw, upRaw, forwardRaw);
+  const sy = signedScale(upRaw, forwardRaw, rightRaw);
+  const sz = signedScale(forwardRaw, rightRaw, upRaw);
+
+  if (Math.abs(sx) < 1e-6 || Math.abs(sy) < 1e-6 || Math.abs(sz) < 1e-6) {
+    object.position.set(m[3], m[7], m[11]);
+    object.quaternion.identity();
+    object.scale.set(1, 1, 1);
+    return;
+  }
+
+  const forward = forwardRaw.clone().divideScalar(sz).normalize();
+  const up = upRaw.clone().divideScalar(sy);
+  up.addScaledVector(forward, -up.dot(forward)).normalize();
+  const right = new THREE.Vector3().crossVectors(up, forward).normalize();
+
+  const rot = new THREE.Matrix4().makeBasis(right, up, forward);
+  object.position.set(m[3], m[7], m[11]);
+  object.quaternion.setFromRotationMatrix(rot);
+  object.scale.set(sx, sy, sz);
 }
+
 
 function colorMaterial(colorEl?: Element | null, override?: string): THREE.Material {
   let r = 150; let g = 174; let b = 190; let a = 100;
@@ -254,7 +279,7 @@ async function buildMod(path: string, ctx: BuildContext, overrideColor?: string)
       const mat = colorMaterial(childByTag(entity, 'Color'), overrideColor);
       const mesh = decorateMesh(new THREE.Mesh(geo, mat));
       mesh.name = `${path}#${entity.getAttribute('ID') || ''}`;
-      mesh.applyMatrix4(matrixFromString(childByTag(entity, 'TransformMatrix')?.getAttribute('Value')));
+      applyGimTransform(mesh, childByTag(entity, 'TransformMatrix')?.getAttribute('Value'));
       group.add(mesh);
     }
     return group;
@@ -281,7 +306,7 @@ async function buildPhm(path: string, ctx: BuildContext): Promise<THREE.Object3D
       if (!ref) continue;
       const child = await buildSolidRef(ref, ctx, kv[`COLOR${i}`]);
       if (!child) continue;
-      child.applyMatrix4(matrixFromString(kv[`TRANSFORMMATRIX${i}`]));
+      applyGimTransform(child, kv[`TRANSFORMMATRIX${i}`]);
       group.add(child);
     }
     return group;
@@ -308,7 +333,7 @@ async function buildDev(path: string, ctx: BuildContext): Promise<THREE.Object3D
       if (!ref) continue;
       const child = await buildSolidRef(ref, ctx);
       if (!child) continue;
-      child.applyMatrix4(matrixFromString(kv[`TRANSFORMMATRIX${i}`]));
+      applyGimTransform(child, kv[`TRANSFORMMATRIX${i}`]);
       group.add(child);
     }
 
@@ -362,7 +387,7 @@ export async function loadGimGeometryModel(ctx: ViewerContext, state: AppState, 
       const dev = await buildDev(`DEV/${node.devPath}`, buildCtx);
       if (dev.children.length === 0) continue;
       dev.name = node.name;
-      dev.applyMatrix4(matrixFromString(node.transformMatrix));
+      applyGimTransform(dev, node.transformMatrix);
       root.add(dev);
     }
   }
