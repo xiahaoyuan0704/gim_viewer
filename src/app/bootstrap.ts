@@ -9,6 +9,7 @@ import { setupIfcSelectModal } from '../ui/ifcSelectModal.js';
 import { setupOpenGimService, loadSelectedIfcFiles } from '../services/openGimService.js';
 import { setupOpenIfcService } from '../services/openIfcService.js';
 import { resetHighlight } from '../viewer/highlight.js';
+import { setupDesktopBridge } from './desktop.js';
 import { container, btnClear, loadingEl } from '../ui/dom.js';
 import type { ModelEventCallbacks } from '../viewer/ifcLoader.js';
 
@@ -40,6 +41,7 @@ async function bootstrapAsync(): Promise<void> {
   });
   setupOpenGimService(ctx, state, (text) => showLoading(text));
   setupOpenIfcService(ctx, state, modelCallbacks);
+  setupDesktopBridge();
 
   // 清空场景
   btnClear.addEventListener('click', async () => {
