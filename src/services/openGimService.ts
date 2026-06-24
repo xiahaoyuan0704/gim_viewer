@@ -8,7 +8,8 @@ import { parseFileDevRelation } from '../gim/fileDevParser.js';
 import { ensureEngineReady, loadIfcBuffer } from '../viewer/ifcLoader.js';
 import { buildIfcNameIndex } from '../viewer/ifcNameIndex.js';
 import { loadGimGeometryModel } from '../viewer/gimGeometryLoader.js';
-import { fitCameraToScene } from '../viewer/camera.js';
+import * as THREE from 'three';
+import { fitCameraToScene, frameBox } from '../viewer/camera.js';
 import { openIfcModal, getModalSelectedEntries, closeIfcModal } from '../ui/ifcSelectModal.js';
 import { buildAndRenderCbmTree } from '../ui/cbmTreeView.js';
 import { renderFileDevPanel } from '../ui/fileDevView.js';
@@ -98,7 +99,13 @@ export function setupOpenGimService(ctx: ViewerContext, state: AppState, showMes
         if (!modelId) { showLoading('未在 GIM 文件中找到可渲染的 IFC 或 MOD/PHM/DEV 几何'); setTimeout(hideLoading, 3000); return; }
         modelCallbacks.onModelAdded(modelId);
         emptyTipEl.style.display = 'none';
-        fitCameraToScene(ctx, state);
+        const nativeModel = ctx.gimModels.get(modelId);
+        if (nativeModel) {
+          await frameBox(ctx, new THREE.Box3().setFromObject(nativeModel));
+          state.hasFittedCamera = true;
+        } else {
+          fitCameraToScene(ctx, state);
+        }
         hideLoading();
         return;
       }

@@ -31,12 +31,6 @@ export function addModelToUI(ctx: ViewerContext, state: AppState, modelId: strin
     if (gimModel) {
       (ctx.world.scene as any).three.remove(gimModel);
       ctx.gimModels.delete(modelId);
-      if (ctx.gimModels.size === 0) {
-        const scene = (ctx.world.scene as any).three;
-        scene.background?.set?.(0xeeeeee);
-        scene.getObjectByName('gim-native-hemi-light')?.removeFromParent();
-        scene.getObjectByName('gim-native-key-light')?.removeFromParent();
-      }
       state.loadedModels.delete(modelId);
       removeModelFromUI(modelId);
       return;

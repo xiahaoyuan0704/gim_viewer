@@ -115,22 +115,6 @@ function decorateMesh(mesh: THREE.Mesh): THREE.Mesh {
   return mesh;
 }
 
-function ensureNativeSceneStyle(ctx: ViewerContext): void {
-  const scene = (ctx.world.scene as any).three as THREE.Scene;
-  scene.background = new THREE.Color(0x555555);
-  if (!scene.getObjectByName('gim-native-hemi-light')) {
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x334455, 1.8);
-    hemi.name = 'gim-native-hemi-light';
-    scene.add(hemi);
-  }
-  if (!scene.getObjectByName('gim-native-key-light')) {
-    const light = new THREE.DirectionalLight(0xffffff, 2.4);
-    light.name = 'gim-native-key-light';
-    light.position.set(0.8, 1, 0.7).normalize().multiplyScalar(1000);
-    scene.add(light);
-  }
-}
-
 function geometryFromEntity(entity: Element): THREE.BufferGeometry | null {
   const cuboid = childByTag(entity, 'Cuboid');
   if (cuboid) {
@@ -398,7 +382,6 @@ export async function loadGimGeometryModel(ctx: ViewerContext, state: AppState, 
   if (root.children.length === 0) return null;
   root = normalizeForViewing(root);
   const modelId = 'GIM 几何模型';
-  ensureNativeSceneStyle(ctx);
   ctx.gimModels.set(modelId, root);
   (ctx.world.scene as any).three.add(root);
   state.loadedModels.set(modelId, { modelId, visible: true });
