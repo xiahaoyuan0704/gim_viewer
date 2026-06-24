@@ -10,7 +10,8 @@ export type ModelEventCallbacks = {
 /** 初始化 IFC 引擎（仅首次调用生效） */
 export async function initEngine(ctx: ViewerContext, state: AppState): Promise<void> {
   if (state.initialized) return;
-  await ctx.ifcLoader.setup({ autoSetWasm: false, wasm: { path: '/', absolute: true } });
+  const wasmPath = window.location.protocol === 'file:' ? './' : '/';
+  await ctx.ifcLoader.setup({ autoSetWasm: false, wasm: { path: wasmPath, absolute: false } });
   const workerUrl = await OBC.FragmentsManager.getWorker();
   ctx.fragments.init(workerUrl);
   ctx.world.camera.controls?.addEventListener('update', () => ctx.fragments.core.update());

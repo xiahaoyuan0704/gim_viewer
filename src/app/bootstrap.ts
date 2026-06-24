@@ -9,6 +9,7 @@ import { setupIfcSelectModal } from '../ui/ifcSelectModal.js';
 import { setupOpenGimService, loadSelectedIfcFiles } from '../services/openGimService.js';
 import { setupOpenIfcService } from '../services/openIfcService.js';
 import { resetHighlight } from '../viewer/highlight.js';
+import { setupDesktopBridge } from './desktop.js';
 import { container, btnClear, loadingEl } from '../ui/dom.js';
 import type { ModelEventCallbacks } from '../viewer/ifcLoader.js';
 
@@ -38,14 +39,20 @@ async function bootstrapAsync(): Promise<void> {
   setupSelection(ctx, state, container, (modelId, localId) => {
     showIfcElementProperties(ctx, state, modelId, localId);
   });
-  setupOpenGimService(ctx, state, (text) => showLoading(text));
+  setupOpenGimService(ctx, state, (text) => showLoading(text), modelCallbacks);
   setupOpenIfcService(ctx, state, modelCallbacks);
+  setupDesktopBridge();
 
   // 清空场景
   btnClear.addEventListener('click', async () => {
     for (const [modelId] of state.loadedModels) {
+      if (ctx.gimModels.has(modelId)) continue;
       ctx.fragments.core.disposeModel(modelId);
     }
+    for (const [, model] of ctx.gimModels) {
+      (ctx.world.scene as any).three.remove(model);
+    }
+    ctx.gimModels.clear();
     state.reset();
     document.getElementById('model-list')!.innerHTML = '';
     document.getElementById('cbm-tree-panel')!.innerHTML = '';
