@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { ViewerContext } from './viewerEngine.js';
 import type { AppState } from '../app/state.js';
 import type { CbmNode } from '../gim/types.js';
-import { parseKeyValue } from '../gim/cbmParser.js';
+import { parseKeyValueEntries, type KeyValueEntry } from '../gim/cbmParser.js';
 
 const IDENTITY = '1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1';
 
@@ -138,6 +138,27 @@ function decorateMesh(mesh: THREE.Mesh): THREE.Mesh {
     mesh.add(edges);
   }
   return mesh;
+}
+
+
+function modelsAfterCount(entries: KeyValueEntry[], countKey: string, valuePrefix: string, stride = 2): Array<{ ref: string; transform: string; color?: string }> {
+  const out: Array<{ ref: string; transform: string; color?: string }> = [];
+  const upperPrefix = valuePrefix.toUpperCase();
+  for (let i = 0; i < entries.length; i++) {
+    if (entries[i].key !== countKey) continue;
+    const count = Number.parseInt(entries[i].value || '0', 10);
+    if (!Number.isFinite(count) || count <= 0) continue;
+    let j = i + 1;
+    for (let item = 0; item < count && j < entries.length; item++) {
+      while (j < entries.length && !entries[j].key.toUpperCase().startsWith(upperPrefix)) j++;
+      const ref = entries[j]?.value;
+      const transform = entries[j + 1]?.key === 'TRANSFORMMATRIX' ? entries[j + 1].value : IDENTITY;
+      const color = stride >= 3 && entries[j + 2]?.key === 'COLOR' ? entries[j + 2].value : undefined;
+      if (ref) out.push({ ref, transform, color });
+      j += stride;
+    }
+  }
+  return out;
 }
 
 function geometryFromEntity(entity: Element): THREE.BufferGeometry | null {
@@ -299,14 +320,11 @@ async function buildPhm(path: string, ctx: BuildContext): Promise<THREE.Object3D
     group.name = path;
     if (!text) return group;
 
-    const kv = parseKeyValue(text);
-    const count = Number(kv['SOLIDMODELS.NUM'] || 0);
-    for (let i = 0; i < count; i++) {
-      const ref = kv[`SOLIDMODEL${i}`];
-      if (!ref) continue;
-      const child = await buildSolidRef(ref, ctx, kv[`COLOR${i}`]);
+    const entries = parseKeyValueEntries(text);
+    for (const { ref, transform, color } of modelsAfterCount(entries, 'SOLIDMODELS.NUM', 'SOLIDMODEL', 3)) {
+      const child = await buildSolidRef(ref, ctx, color);
       if (!child) continue;
-      applyGimTransform(child, kv[`TRANSFORMMATRIX${i}`]);
+      applyGimTransform(child, transform);
       group.add(child);
     }
     return group;
@@ -326,22 +344,18 @@ async function buildDev(path: string, ctx: BuildContext): Promise<THREE.Object3D
     group.name = path;
     if (!text) return group;
 
-    const kv = parseKeyValue(text);
-    const solidCount = Number(kv['SOLIDMODELS.NUM'] || 0);
-    for (let i = 0; i < solidCount; i++) {
-      const ref = kv[`SOLIDMODEL${i}`];
-      if (!ref) continue;
+    const entries = parseKeyValueEntries(text);
+    for (const { ref, transform } of modelsAfterCount(entries, 'SOLIDMODELS.NUM', 'SOLIDMODEL', 2)) {
       const child = await buildSolidRef(ref, ctx);
       if (!child) continue;
-      applyGimTransform(child, kv[`TRANSFORMMATRIX${i}`]);
+      applyGimTransform(child, transform);
       group.add(child);
     }
 
-    const subCount = Number(kv['SUBDEVICES.NUM'] || 0);
-    for (let i = 0; i < subCount; i++) {
-      const ref = kv[`SUBDEVICES${i}`] || kv[`SUBDEVICE${i}`];
-      if (!ref) continue;
-      group.add(await buildDev(`DEV/${ref}`, ctx));
+    for (const { ref, transform } of modelsAfterCount(entries, 'SUBDEVICES.NUM', 'SUBDEVICE', 2)) {
+      const child = await buildDev(`DEV/${ref}`, ctx);
+      applyGimTransform(child, transform);
+      group.add(child);
     }
     return group;
   })();

@@ -1,5 +1,5 @@
 import type { IfcEntry, CbmNode } from './types.js';
-import { parseKeyValue } from './cbmParser.js';
+import { parseKeyValue, parseKeyValueEntries, valuesAfterCount } from './cbmParser.js';
 
 /** 扫描 DEV/ 目录下的 IFC 文件 */
 export function scanIfcFiles(files: Map<string, File>): IfcEntry[] {
@@ -20,14 +20,22 @@ export async function discoverIfcFromCBM(files: Map<string, File>): Promise<IfcE
   async function walk(p: string) {
     if (visited.has(p)) return; visited.add(p);
     const f = files.get(p); if (!f) return;
-    const kv = parseKeyValue(await f.text());
-    const n = parseInt(kv['IFC.NUM'] || '0', 10);
-    for (let i = 0; i < n; i++) { const r = kv[`IFC${i}`]; if (r) { const nm = r.replace(/\.ifc$/i, ''); ifcSet.set(nm, { name: nm, path: `DEV/${r}`, modelId: nm }); } }
-    const sn = parseInt(kv['SUBSYSTEMS.NUM'] || '0', 10);
-    for (let i = 0; i < sn; i++) { const s = kv[`SUBSYSTEM${i}`]; if (s) await walk(`CBM/${s}`); }
+    const text = await f.text();
+    const kv = parseKeyValue(text);
+    const entries = parseKeyValueEntries(text);
+    for (const r of valuesAfterCount(entries, 'IFC.NUM', 'IFC')) {
+      const nm = r.replace(/\.ifc$/i, '');
+      ifcSet.set(nm, { name: nm, path: `DEV/${r}`, modelId: nm });
+    }
+    for (const s of valuesAfterCount(entries, 'SUBSYSTEMS.NUM', 'SUBSYSTEM')) await walk(`CBM/${s}`);
+    for (const s of valuesAfterCount(entries, 'SUBDEVICES.NUM', 'SUBDEVICE')) await walk(`CBM/${s}`);
     const sg = kv['SUBSYSTEM']; if (sg) await walk(`CBM/${sg}`);
   }
   if (files.has('CBM/project.cbm')) await walk('CBM/project.cbm');
+  else {
+    const cbms = Array.from(files.keys()).filter((p) => /^CBM\/[^/]+\.cbm$/i.test(p));
+    if (cbms.length === 1) await walk(cbms[0]);
+  }
   return Array.from(ifcSet.values()).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
 }
 
