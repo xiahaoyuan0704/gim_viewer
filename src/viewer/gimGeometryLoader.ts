@@ -305,6 +305,25 @@ async function buildDev(path: string, ctx: BuildContext): Promise<THREE.Object3D
   return (await promise).clone(true);
 }
 
+
+function normalizeForViewing(group: THREE.Group): THREE.Group {
+  const box = new THREE.Box3().setFromObject(group);
+  if (box.isEmpty()) return group;
+
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z);
+  const scale = maxDim > 10000 ? 0.001 : 1;
+
+  const wrapper = new THREE.Group();
+  wrapper.name = group.name;
+  group.position.sub(center);
+  wrapper.scale.setScalar(scale);
+  wrapper.add(group);
+  console.info(`GIM 原生几何: 已居中显示，原始包围盒尺寸 ${size.x.toFixed(2)} × ${size.y.toFixed(2)} × ${size.z.toFixed(2)}，显示缩放 ${scale}`);
+  return wrapper;
+}
+
 function collectDeviceNodes(node: CbmNode | null, out: CbmNode[] = []): CbmNode[] {
   if (!node) return out;
   if (node.devPath) out.push(node);
@@ -313,7 +332,7 @@ function collectDeviceNodes(node: CbmNode | null, out: CbmNode[] = []): CbmNode[
 }
 
 export async function loadGimGeometryModel(ctx: ViewerContext, state: AppState, files: Map<string, File>): Promise<string | null> {
-  const root = new THREE.Group();
+  let root = new THREE.Group();
   root.name = 'GIM 几何模型';
   const buildCtx: BuildContext = { files, pathIndex: makePathIndex(files), modCache: new Map(), phmCache: new Map(), devCache: new Map(), stlCache: new Map() };
   const nodes = collectDeviceNodes(state.currentCbmTree);
@@ -341,6 +360,7 @@ export async function loadGimGeometryModel(ctx: ViewerContext, state: AppState, 
   }
 
   if (root.children.length === 0) return null;
+  root = normalizeForViewing(root);
   const modelId = 'GIM 几何模型';
   ctx.gimModels.set(modelId, root);
   (ctx.world.scene as any).three.add(root);
