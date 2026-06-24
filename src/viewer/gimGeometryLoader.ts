@@ -69,17 +69,20 @@ function signedScale(axis: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3): n
 function applyGimTransform(object: THREE.Object3D, value: string | null | undefined): void {
   const n = nums(value || IDENTITY);
   const m = n.length >= 16 ? n.slice(0, 16) : nums(IDENTITY);
+  const rowTranslation = new THREE.Vector3(m[3], m[7], m[11]);
+  const columnTranslation = new THREE.Vector3(m[12], m[13], m[14]);
+  const useColumnMajor = columnTranslation.lengthSq() > 1e-12 && rowTranslation.lengthSq() <= 1e-12;
 
-  const rightRaw = new THREE.Vector3(m[0], m[4], m[8]);
-  const upRaw = new THREE.Vector3(m[1], m[5], m[9]);
-  const forwardRaw = new THREE.Vector3(m[2], m[6], m[10]);
+  const rightRaw = useColumnMajor ? new THREE.Vector3(m[0], m[1], m[2]) : new THREE.Vector3(m[0], m[4], m[8]);
+  const upRaw = useColumnMajor ? new THREE.Vector3(m[4], m[5], m[6]) : new THREE.Vector3(m[1], m[5], m[9]);
+  const forwardRaw = useColumnMajor ? new THREE.Vector3(m[8], m[9], m[10]) : new THREE.Vector3(m[2], m[6], m[10]);
 
   const sx = signedScale(rightRaw, upRaw, forwardRaw);
   const sy = signedScale(upRaw, forwardRaw, rightRaw);
   const sz = signedScale(forwardRaw, rightRaw, upRaw);
 
   if (Math.abs(sx) < 1e-6 || Math.abs(sy) < 1e-6 || Math.abs(sz) < 1e-6) {
-    object.position.set(m[3], m[7], m[11]);
+    object.position.copy(useColumnMajor ? columnTranslation : rowTranslation);
     object.quaternion.identity();
     object.scale.set(1, 1, 1);
     return;
@@ -91,7 +94,7 @@ function applyGimTransform(object: THREE.Object3D, value: string | null | undefi
   const right = new THREE.Vector3().crossVectors(up, forward).normalize();
 
   const rot = new THREE.Matrix4().makeBasis(right, up, forward);
-  object.position.set(m[3], m[7], m[11]);
+  object.position.copy(useColumnMajor ? columnTranslation : rowTranslation);
   object.quaternion.setFromRotationMatrix(rot);
   object.scale.set(sx, sy, sz);
 }
@@ -152,8 +155,8 @@ function modelsAfterCount(entries: KeyValueEntry[], countKey: string, valuePrefi
     for (let item = 0; item < count && j < entries.length; item++) {
       while (j < entries.length && !entries[j].key.toUpperCase().startsWith(upperPrefix)) j++;
       const ref = entries[j]?.value;
-      const transform = entries[j + 1]?.key === 'TRANSFORMMATRIX' ? entries[j + 1].value : IDENTITY;
-      const color = stride >= 3 && entries[j + 2]?.key === 'COLOR' ? entries[j + 2].value : undefined;
+      const transform = entries[j + 1]?.key.toUpperCase().startsWith('TRANSFORMMATRIX') ? entries[j + 1].value : IDENTITY;
+      const color = stride >= 3 && entries[j + 2]?.key.toUpperCase().startsWith('COLOR') ? entries[j + 2].value : undefined;
       if (ref) out.push({ ref, transform, color });
       j += stride;
     }
