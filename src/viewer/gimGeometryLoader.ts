@@ -203,6 +203,26 @@ function pipeGeometry(outerRadius: number, innerRadius: number, height: number):
   return new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false, curveSegments: 48 });
 }
 
+function ribbedInsulatorGeometry(radius: number, skirtRadius: number, height: number, count: number): THREE.BufferGeometry {
+  const n = Math.max(1, Math.floor(count));
+  const points: THREE.Vector2[] = [];
+  points.push(new THREE.Vector2(radius, -height / 2));
+  for (let i = 0; i < n; i++) {
+    const y0 = -height / 2 + (height * i) / n;
+    const y1 = -height / 2 + (height * (i + 0.35)) / n;
+    const y2 = -height / 2 + (height * (i + 0.65)) / n;
+    const y3 = -height / 2 + (height * (i + 1)) / n;
+    points.push(new THREE.Vector2(radius, y0));
+    points.push(new THREE.Vector2(skirtRadius, y1));
+    points.push(new THREE.Vector2(skirtRadius, y2));
+    points.push(new THREE.Vector2(radius, y3));
+  }
+  points.push(new THREE.Vector2(radius, height / 2));
+  const geo = new THREE.LatheGeometry(points, 32);
+  geo.rotateX(Math.PI / 2);
+  return geo;
+}
+
 function wireGeometry(wire: Element): THREE.BufferGeometry | null {
   const start = nums(wire.getAttribute('StartCoord'));
   const end = nums(wire.getAttribute('EndCoord'));
@@ -307,12 +327,9 @@ function geometryFromEntity(entity: Element): THREE.BufferGeometry | null {
 
   const bushing = childByTag(entity, 'PorcelainBushing');
   if (bushing) {
-    const r = Number(bushing.getAttribute('R') || 20);
-    const r1 = Number(bushing.getAttribute('R1') || r * 1.3);
-    const h = Number(bushing.getAttribute('H') || 100);
-    const geo = new THREE.CylinderGeometry(r1, r, h, 32);
-    geo.rotateX(Math.PI / 2);
-    return geo;
+    const r = attrNum(bushing, 'R', 20);
+    const r1 = Math.max(attrNum(bushing, 'R1', r * 1.3), attrNum(bushing, 'R2', r));
+    return ribbedInsulatorGeometry(r, r1, attrNum(bushing, 'H', 100), attrNum(bushing, 'N', 8));
   }
 
   const ring = childByTag(entity, 'Ring');
@@ -352,11 +369,10 @@ function geometryFromEntity(entity: Element): THREE.BufferGeometry | null {
 
   const insulator = childByTag(entity, 'Insulator');
   if (insulator) {
-    const radius = Math.max(attrNum(insulator, 'R', 1), attrNum(insulator, 'R1', 1), attrNum(insulator, 'R2', 1));
+    const core = Math.max(attrNum(insulator, 'R', 1), attrNum(insulator, 'R2', 1));
+    const skirt = Math.max(core, attrNum(insulator, 'R1', core * 1.4));
     const height = Math.max(attrNum(insulator, 'H1', 1) * Math.max(attrNum(insulator, 'N1', 1), 1), attrNum(insulator, 'D', 1));
-    const geo = new THREE.CylinderGeometry(radius, radius, height, 32);
-    geo.rotateX(Math.PI / 2);
-    return geo;
+    return ribbedInsulatorGeometry(core, skirt, height, attrNum(insulator, 'N1', attrNum(insulator, 'N', 8)));
   }
 
   const terminal = childByTag(entity, 'TerminalBlock');
@@ -571,7 +587,10 @@ function normalizeForViewing(group: THREE.Group): THREE.Group {
 
 function collectDeviceNodes(node: CbmNode | null, out: CbmNode[] = []): CbmNode[] {
   if (!node) return out;
-  if (node.devPath) out.push(node);
+  // A CBM node with OBJECTMODELPOINTER represents a complete renderable device.
+  // Its SUBDEVICES are engineering/property children; rendering their DEV files
+  // again creates duplicate parts at different reference transforms.
+  if (node.devPath) { out.push(node); return out; }
   for (const child of node.children) collectDeviceNodes(child, out);
   return out;
 }
