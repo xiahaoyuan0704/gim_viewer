@@ -53,6 +53,10 @@ async function bootstrapAsync(): Promise<void> {
       (ctx.world.scene as any).three.remove(model);
     }
     ctx.gimModels.clear();
+    const scene = (ctx.world.scene as any).three;
+    scene.background?.set?.(0xeeeeee);
+    scene.getObjectByName('gim-native-hemi-light')?.removeFromParent();
+    scene.getObjectByName('gim-native-key-light')?.removeFromParent();
     state.reset();
     document.getElementById('model-list')!.innerHTML = '';
     document.getElementById('cbm-tree-panel')!.innerHTML = '';

@@ -73,7 +73,7 @@ function matrixFromString(value: string | null | undefined): THREE.Matrix4 {
 }
 
 function colorMaterial(colorEl?: Element | null, override?: string): THREE.Material {
-  let r = 170; let g = 170; let b = 170; let a = 100;
+  let r = 150; let g = 174; let b = 190; let a = 100;
   const overrideNums = nums(override || '');
   if (overrideNums.length >= 3) {
     [r, g, b] = overrideNums;
@@ -84,6 +84,10 @@ function colorMaterial(colorEl?: Element | null, override?: string): THREE.Mater
     b = Number(colorEl.getAttribute('B') ?? b);
     a = Number(colorEl.getAttribute('A') ?? a);
   }
+  // Many native GIM packages encode untextured equipment as pure white, which
+  // disappears on the viewer's light background. Keep real colors, but remap
+  // near-white defaults to a blue-gray engineering material.
+  if (r > 235 && g > 235 && b > 235) { r = 175; g = 205; b = 222; }
   const opacity = Math.max(0, Math.min(1, a / 100));
   return new THREE.MeshStandardMaterial({
     color: new THREE.Color(r / 255, g / 255, b / 255),
@@ -93,6 +97,38 @@ function colorMaterial(colorEl?: Element | null, override?: string): THREE.Mater
     metalness: 0.05,
     side: THREE.DoubleSide,
   });
+}
+
+
+function decorateMesh(mesh: THREE.Mesh): THREE.Mesh {
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  const position = mesh.geometry.getAttribute('position');
+  if (position && position.count <= 200000) {
+    const edges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(mesh.geometry, 25),
+      new THREE.LineBasicMaterial({ color: 0x4f6573, transparent: true, opacity: 0.35 }),
+    );
+    edges.name = `${mesh.name || 'mesh'}#edges`;
+    mesh.add(edges);
+  }
+  return mesh;
+}
+
+function ensureNativeSceneStyle(ctx: ViewerContext): void {
+  const scene = (ctx.world.scene as any).three as THREE.Scene;
+  scene.background = new THREE.Color(0x555555);
+  if (!scene.getObjectByName('gim-native-hemi-light')) {
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x334455, 1.8);
+    hemi.name = 'gim-native-hemi-light';
+    scene.add(hemi);
+  }
+  if (!scene.getObjectByName('gim-native-key-light')) {
+    const light = new THREE.DirectionalLight(0xffffff, 2.4);
+    light.name = 'gim-native-key-light';
+    light.position.set(0.8, 1, 0.7).normalize().multiplyScalar(1000);
+    scene.add(light);
+  }
 }
 
 function geometryFromEntity(entity: Element): THREE.BufferGeometry | null {
@@ -200,7 +236,7 @@ async function buildStl(path: string, ctx: BuildContext, overrideColor?: string)
     const header = new TextDecoder().decode(buffer.slice(0, Math.min(buffer.byteLength, 256)));
     const geo = header.trimStart().startsWith('solid') ? parseAsciiStl(new TextDecoder().decode(buffer)) ?? parseBinaryStl(buffer) : parseBinaryStl(buffer);
     if (!geo) return group;
-    group.add(new THREE.Mesh(geo, colorMaterial(null, overrideColor)));
+    group.add(decorateMesh(new THREE.Mesh(geo, colorMaterial(null, overrideColor))));
     return group;
   })();
 
@@ -232,7 +268,7 @@ async function buildMod(path: string, ctx: BuildContext, overrideColor?: string)
       const geo = geometryFromEntity(entity);
       if (!geo) continue;
       const mat = colorMaterial(childByTag(entity, 'Color'), overrideColor);
-      const mesh = new THREE.Mesh(geo, mat);
+      const mesh = decorateMesh(new THREE.Mesh(geo, mat));
       mesh.name = `${path}#${entity.getAttribute('ID') || ''}`;
       mesh.applyMatrix4(matrixFromString(childByTag(entity, 'TransformMatrix')?.getAttribute('Value')));
       group.add(mesh);
@@ -362,6 +398,7 @@ export async function loadGimGeometryModel(ctx: ViewerContext, state: AppState, 
   if (root.children.length === 0) return null;
   root = normalizeForViewing(root);
   const modelId = 'GIM 几何模型';
+  ensureNativeSceneStyle(ctx);
   ctx.gimModels.set(modelId, root);
   (ctx.world.scene as any).three.add(root);
   state.loadedModels.set(modelId, { modelId, visible: true });
