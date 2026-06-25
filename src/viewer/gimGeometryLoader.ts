@@ -585,31 +585,37 @@ function normalizeForViewing(group: THREE.Group): THREE.Group {
   return wrapper;
 }
 
-function collectDeviceNodes(node: CbmNode | null, out: CbmNode[] = []): CbmNode[] {
-  if (!node) return out;
-  // A CBM node with OBJECTMODELPOINTER represents a complete renderable device.
-  // Its SUBDEVICES are engineering/property children; rendering their DEV files
-  // again creates duplicate parts at different reference transforms.
-  if (node.devPath) { out.push(node); return out; }
-  for (const child of node.children) collectDeviceNodes(child, out);
-  return out;
+async function addRenderableCbmNode(node: CbmNode | null, root: THREE.Group, buildCtx: BuildContext): Promise<boolean> {
+  if (!node) return false;
+
+  // Prefer the node's OBJECTMODELPOINTER as the complete device model. If it
+  // really contains renderable geometry, do not render SUBDEVICES again; those
+  // children are often engineering/property children and double-rendering them
+  // is the main cause of severe part drift. If the pointed DEV is only a shell
+  // or metadata file, recurse into children so single-device packages whose
+  // actual geometry lives in child nodes do not become blank.
+  if (node.devPath) {
+    const dev = await buildDev(`DEV/${node.devPath}`, buildCtx);
+    if (dev.children.length > 0) {
+      dev.name = node.name;
+      applyGimTransform(dev, node.transformMatrix);
+      root.add(dev);
+      return true;
+    }
+  }
+
+  let added = false;
+  for (const child of node.children) {
+    added = (await addRenderableCbmNode(child, root, buildCtx)) || added;
+  }
+  return added;
 }
 
 export async function loadGimGeometryModel(ctx: ViewerContext, state: AppState, files: Map<string, File>): Promise<string | null> {
   let root = new THREE.Group();
   root.name = 'GIM 几何模型';
   const buildCtx: BuildContext = { files, pathIndex: makePathIndex(files), modCache: new Map(), phmCache: new Map(), devCache: new Map(), stlCache: new Map() };
-  const nodes = collectDeviceNodes(state.currentCbmTree);
-
-  if (nodes.length > 0) {
-    for (const node of nodes) {
-      const dev = await buildDev(`DEV/${node.devPath}`, buildCtx);
-      if (dev.children.length === 0) continue;
-      dev.name = node.name;
-      applyGimTransform(dev, node.transformMatrix);
-      root.add(dev);
-    }
-  }
+  await addRenderableCbmNode(state.currentCbmTree, root, buildCtx);
 
   // Some GIM variants, especially line projects, use CBM hierarchy keys that are not
   // part of the common substation subset. If the CBM walk did not produce renderable
