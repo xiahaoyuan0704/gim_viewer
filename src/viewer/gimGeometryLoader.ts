@@ -495,13 +495,30 @@ async function buildMod(path: string, ctx: BuildContext, overrideColor?: string)
 
     const doc = new DOMParser().parseFromString(text, 'application/xml');
     const entities = Array.from(doc.getElementsByTagName('*')).filter((el) => el.tagName.toLowerCase() === 'entity');
+    const geometryById = new Map<string, THREE.BufferGeometry>();
     for (const entity of entities) {
-      if ((entity.getAttribute('Visible') || 'True').toLowerCase() === 'false') continue;
-      const geo = geometryFromEntity(entity);
+      const id = entity.getAttribute('ID') || '';
+      const visible = (entity.getAttribute('Visible') || 'True').toLowerCase() !== 'false';
+      let geo = geometryFromEntity(entity);
+
+      // Several MOD files use Boolean entities as the final visible shape. The
+      // Unity reference parser keeps Boolean CSG disabled by default and simply
+      // aliases the Boolean result to Entity1. Doing the same here prevents
+      // Boolean-heavy models from becoming blank while avoiding fragile CSG in
+      // the browser.
+      const boolean = childByTag(entity, 'Boolean');
+      if (!geo && boolean) {
+        const sourceId = boolean.getAttribute('Entity1') || '';
+        const source = geometryById.get(sourceId);
+        if (source) geo = source.clone();
+      }
+
       if (!geo) continue;
+      if (id) geometryById.set(id, geo.clone());
+      if (!visible) continue;
       const mat = colorMaterial(childByTag(entity, 'Color'), overrideColor);
       const mesh = decorateMesh(new THREE.Mesh(geo, mat));
-      mesh.name = `${path}#${entity.getAttribute('ID') || ''}`;
+      mesh.name = `${path}#${id}`;
       applyGimTransform(mesh, childByTag(entity, 'TransformMatrix')?.getAttribute('Value'));
       group.add(mesh);
     }

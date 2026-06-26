@@ -37,6 +37,24 @@ export function flattenExtractedFiles(obj: unknown, prefix = ''): Map<string, Fi
   return result;
 }
 
+
+function stripCommonGimRoot(files: Map<string, File>): Map<string, File> {
+  const gimFolders = new Set(['CBM', 'DEV', 'PHM', 'MOD']);
+  const normalized = new Map<string, File>();
+  let changed = false;
+  for (const [path, file] of files) {
+    const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
+    const folderIndex = parts.findIndex((part) => gimFolders.has(part.toUpperCase()));
+    if (folderIndex > 0) {
+      normalized.set(parts.slice(folderIndex).join('/'), file);
+      changed = true;
+    } else {
+      normalized.set(parts.join('/'), file);
+    }
+  }
+  return changed ? normalized : files;
+}
+
 /** 解压 GIM 文件，返回展平后的文件 Map */
 export async function extractGimFile(arrayBuffer: ArrayBuffer): Promise<Map<string, File>> {
   const offset = findArchiveOffset(arrayBuffer);
@@ -47,5 +65,5 @@ export async function extractGimFile(arrayBuffer: ArrayBuffer): Promise<Map<stri
   const archive = await Archive.open(file);
   const extracted = await archive.extractFiles();
   await archive.close();
-  return flattenExtractedFiles(extracted);
+  return stripCommonGimRoot(flattenExtractedFiles(extracted));
 }
