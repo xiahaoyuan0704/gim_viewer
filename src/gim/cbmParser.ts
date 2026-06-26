@@ -1,13 +1,45 @@
 import type { CbmNode } from './types.js';
 
-/** 解析 KEY=VALUE 格式文本 */
-export function parseKeyValue(text: string): Record<string, string> {
-  const result: Record<string, string> = {};
+export interface KeyValueEntry { key: string; value: string }
+
+/** 解析 KEY=VALUE 格式文本，保留顺序和重复键 */
+export function parseKeyValueEntries(text: string): KeyValueEntry[] {
+  const entries: KeyValueEntry[] = [];
   for (const line of text.split(/\r?\n/)) {
     const idx = line.indexOf('=');
-    if (idx > 0) result[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+    if (idx > 0) entries.push({ key: line.slice(0, idx).trim(), value: line.slice(idx + 1).trim() });
   }
+  return entries;
+}
+
+/** 解析 KEY=VALUE 格式文本。重复键会保留最后一个值，兼容旧调用点。 */
+export function parseKeyValue(text: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const { key, value } of parseKeyValueEntries(text)) result[key] = value;
   return result;
+}
+
+export function valuesAfterCount(entries: KeyValueEntry[], countKey: string, valuePrefix: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    if (entries[i].key !== countKey) continue;
+    const count = Number.parseInt(entries[i].value || '0', 10);
+    if (!Number.isFinite(count) || count <= 0) continue;
+    for (let j = i + 1; j < entries.length && out.length < count; j++) {
+      if (entries[j].key.toUpperCase().startsWith(valuePrefix.toUpperCase())) out.push(entries[j].value);
+    }
+  }
+  return out;
+}
+
+function addUnique(out: string[], value: string | undefined): void {
+  if (value && !out.includes(value)) out.push(value);
+}
+
+function resolveCbmRoot(files: Map<string, File>): string | null {
+  if (files.has('CBM/project.cbm')) return 'CBM/project.cbm';
+  const cbms = Array.from(files.keys()).filter((p) => /^CBM\/[^/]+\.cbm$/i.test(p));
+  return cbms.length === 1 ? cbms[0] : null;
 }
 
 /** 从文件集合递归构建 CBM 层级树 */
@@ -16,20 +48,22 @@ export async function buildCbmTree(files: Map<string, File>): Promise<CbmNode | 
   async function build(p: string): Promise<CbmNode | null> {
     if (visited.has(p)) return null; visited.add(p);
     const f = files.get(p); if (!f) return null;
-    const kv = parseKeyValue(await f.text());
+    const text = await f.text();
+    const kv = parseKeyValue(text);
+    const entries = parseKeyValueEntries(text);
     const en = kv['ENTITYNAME'] || '';
     const cn = kv['SYSCLASSIFYNAME'] || kv['PARTNAME'] || '';
     const dn = cn || en || p.split('/').pop()!;
     const children: CbmNode[] = [];
-    const sg = kv['SUBSYSTEM']; if (sg) { const c = await build(`CBM/${sg}`); if (c) children.push(c); }
-    const sn = parseInt(kv['SUBSYSTEMS.NUM'] || '0', 10);
-    for (let i = 0; i < sn; i++) { const s = kv[`SUBSYSTEM${i}`]; if (s) { const c = await build(`CBM/${s}`); if (c) children.push(c); } }
-    const dn2 = parseInt(kv['SUBDEVICES.NUM'] || '0', 10);
-    for (let i = 0; i < dn2; i++) { const s = kv[`SUBDEVICE${i}`]; if (s) { const c = await build(`CBM/${s}`); if (c) children.push(c); } }
+    const childRefs: string[] = [];
+    addUnique(childRefs, kv['SUBSYSTEM']);
+    for (const ref of valuesAfterCount(entries, 'SUBSYSTEMS.NUM', 'SUBSYSTEM')) addUnique(childRefs, ref);
+    for (const ref of valuesAfterCount(entries, 'SUBDEVICES.NUM', 'SUBDEVICE')) addUnique(childRefs, ref);
+    for (const s of childRefs) { const c = await build(`CBM/${s}`); if (c) children.push(c); }
     return { path: p, name: dn, entityName: en, children, famPath: kv['BASEFAMILY'] || '', devPath: kv['OBJECTMODELPOINTER'] || '', ifcFile: kv['IFCFILE'] || '', ifcGuid: (kv['IFCGUID'] || '').replace(/\$+$/, '').trim(), classifyName: cn, transformMatrix: kv['TRANSFORMMATRIX'] || '' };
   }
-  if (!files.has('CBM/project.cbm')) return null;
-  return build('CBM/project.cbm');
+  const root = resolveCbmRoot(files);
+  return root ? build(root) : null;
 }
 
 /** 构建 CBM 文件名 → CbmNode 索引 */

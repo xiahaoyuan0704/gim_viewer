@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { ViewerContext } from './viewerEngine.js';
 import type { AppState } from '../app/state.js';
 import type { CbmNode } from '../gim/types.js';
-import { parseKeyValue } from '../gim/cbmParser.js';
+import { parseKeyValueEntries, type KeyValueEntry } from '../gim/cbmParser.js';
 
 const IDENTITY = '1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1';
 
@@ -52,6 +52,24 @@ function refsInFolder(ctx: BuildContext, folder: string, ext: string): string[] 
   return result.sort((a, b) => a.localeCompare(b));
 }
 
+function fileNameOf(path: string): string { return normalizePath(path).split('/').pop() || ''; }
+
+function entryKeyStartsWith(entry: KeyValueEntry | undefined, prefix: string): boolean {
+  return !!entry && entry.key.toUpperCase().startsWith(prefix.toUpperCase());
+}
+
+async function collectRootDevPaths(ctx: BuildContext): Promise<string[]> {
+  const devPaths = refsInFolder(ctx, 'DEV', '.dev');
+  const referenced = new Set<string>();
+  for (const devPath of devPaths) {
+    const text = await loadText(ctx, devPath);
+    if (!text) continue;
+    for (const { ref } of modelsAfterCount(parseKeyValueEntries(text), 'SUBDEVICES.NUM', 'SUBDEVICE', 2)) referenced.add(fileNameOf(ref));
+  }
+  const roots = devPaths.filter((devPath) => !referenced.has(fileNameOf(devPath)));
+  return roots.length > 0 ? roots : devPaths;
+}
+
 function childByTag(entity: Element, tagName: string): Element | null {
   const lower = tagName.toLowerCase();
   return Array.from(entity.children).find((child) => child.tagName.toLowerCase() === lower) ?? null;
@@ -61,41 +79,49 @@ function nums(value: string | null | undefined): number[] {
   return (value || '').split(/[;,\s]+/).map((v) => Number(v)).filter((v) => Number.isFinite(v));
 }
 
-function signedScale(axis: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3): number {
-  const sign = Math.sign(new THREE.Vector3().crossVectors(a, b).dot(axis)) || 1;
-  return axis.length() * sign;
+function matrixFromValues(values: number[], columnMajor: boolean): THREE.Matrix4 {
+  const matrix = new THREE.Matrix4();
+  if (columnMajor) {
+    matrix.fromArray(values);
+  } else {
+    matrix.set(
+      values[0], values[1], values[2], values[3],
+      values[4], values[5], values[6], values[7],
+      values[8], values[9], values[10], values[11],
+      values[12], values[13], values[14], values[15],
+    );
+  }
+  return matrix;
+}
+
+function decomposeGimMatrix(values: number[], columnMajor: boolean): { position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 } | null {
+  const matrix = matrixFromValues(values, columnMajor);
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  matrix.decompose(position, quaternion, scale);
+  if (![position.x, position.y, position.z, quaternion.x, quaternion.y, quaternion.z, quaternion.w, scale.x, scale.y, scale.z].every(Number.isFinite)) return null;
+  return { position, quaternion, scale };
 }
 
 function applyGimTransform(object: THREE.Object3D, value: string | null | undefined): void {
   const n = nums(value || IDENTITY);
   const m = n.length >= 16 ? n.slice(0, 16) : nums(IDENTITY);
-
-  const rightRaw = new THREE.Vector3(m[0], m[4], m[8]);
-  const upRaw = new THREE.Vector3(m[1], m[5], m[9]);
-  const forwardRaw = new THREE.Vector3(m[2], m[6], m[10]);
-
-  const sx = signedScale(rightRaw, upRaw, forwardRaw);
-  const sy = signedScale(upRaw, forwardRaw, rightRaw);
-  const sz = signedScale(forwardRaw, rightRaw, upRaw);
-
-  if (Math.abs(sx) < 1e-6 || Math.abs(sy) < 1e-6 || Math.abs(sz) < 1e-6) {
-    object.position.set(m[3], m[7], m[11]);
+  const rowTranslation = new THREE.Vector3(m[3], m[7], m[11]);
+  const columnTranslation = new THREE.Vector3(m[12], m[13], m[14]);
+  const preferColumnMajor = columnTranslation.lengthSq() > 1e-12 && rowTranslation.lengthSq() <= 1e-12;
+  const primary = decomposeGimMatrix(m, preferColumnMajor);
+  const fallback = primary ?? decomposeGimMatrix(m, !preferColumnMajor);
+  if (!fallback) {
+    object.position.copy(preferColumnMajor ? columnTranslation : rowTranslation);
     object.quaternion.identity();
     object.scale.set(1, 1, 1);
     return;
   }
-
-  const forward = forwardRaw.clone().divideScalar(sz).normalize();
-  const up = upRaw.clone().divideScalar(sy);
-  up.addScaledVector(forward, -up.dot(forward)).normalize();
-  const right = new THREE.Vector3().crossVectors(up, forward).normalize();
-
-  const rot = new THREE.Matrix4().makeBasis(right, up, forward);
-  object.position.set(m[3], m[7], m[11]);
-  object.quaternion.setFromRotationMatrix(rot);
-  object.scale.set(sx, sy, sz);
+  object.position.copy(fallback.position);
+  object.quaternion.copy(fallback.quaternion);
+  object.scale.copy(fallback.scale);
 }
-
 
 function colorMaterial(colorEl?: Element | null, override?: string): THREE.Material {
   let r = 150; let g = 174; let b = 190; let a = 100;
@@ -140,6 +166,143 @@ function decorateMesh(mesh: THREE.Mesh): THREE.Mesh {
   return mesh;
 }
 
+
+function modelsAfterCount(entries: KeyValueEntry[], countKey: string, valuePrefix: string, stride = 2): Array<{ ref: string; transform: string; color?: string }> {
+  const out: Array<{ ref: string; transform: string; color?: string }> = [];
+  const upperPrefix = valuePrefix.toUpperCase();
+  for (let i = 0; i < entries.length; i++) {
+    if (entries[i].key !== countKey) continue;
+    const count = Number.parseInt(entries[i].value || '0', 10);
+    if (!Number.isFinite(count) || count <= 0) continue;
+    let j = i + 1;
+    for (let item = 0; item < count && j < entries.length; item++) {
+      while (j < entries.length && !entries[j].key.toUpperCase().startsWith(upperPrefix)) j++;
+      const ref = entries[j]?.value;
+      const transform = entryKeyStartsWith(entries[j + 1], 'TRANSFORMMATRIX') ? entries[j + 1].value : IDENTITY;
+      const color = stride >= 3 && entryKeyStartsWith(entries[j + 2], 'COLOR') ? entries[j + 2].value : undefined;
+      if (ref) out.push({ ref, transform, color });
+      j += stride;
+    }
+  }
+  return out;
+}
+
+function attrNum(el: Element, name: string, fallback: number): number {
+  const value = Number(el.getAttribute(name));
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function pipeGeometry(outerRadius: number, innerRadius: number, height: number): THREE.BufferGeometry {
+  const shape = new THREE.Shape();
+  shape.absarc(0, 0, outerRadius, 0, Math.PI * 2, false);
+  if (innerRadius > 0 && innerRadius < outerRadius) {
+    const hole = new THREE.Path();
+    hole.absarc(0, 0, innerRadius, 0, Math.PI * 2, true);
+    shape.holes.push(hole);
+  }
+  return new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false, curveSegments: 48 });
+}
+
+function ribbedInsulatorGeometry(radius: number, skirtRadius: number, height: number, count: number): THREE.BufferGeometry {
+  const n = Math.max(1, Math.floor(count));
+  const points: THREE.Vector2[] = [];
+  points.push(new THREE.Vector2(radius, -height / 2));
+  for (let i = 0; i < n; i++) {
+    const y0 = -height / 2 + (height * i) / n;
+    const y1 = -height / 2 + (height * (i + 0.35)) / n;
+    const y2 = -height / 2 + (height * (i + 0.65)) / n;
+    const y3 = -height / 2 + (height * (i + 1)) / n;
+    points.push(new THREE.Vector2(radius, y0));
+    points.push(new THREE.Vector2(skirtRadius, y1));
+    points.push(new THREE.Vector2(skirtRadius, y2));
+    points.push(new THREE.Vector2(radius, y3));
+  }
+  points.push(new THREE.Vector2(radius, height / 2));
+  const geo = new THREE.LatheGeometry(points, 32);
+  geo.rotateX(Math.PI / 2);
+  return geo;
+}
+
+function wireGeometry(wire: Element): THREE.BufferGeometry | null {
+  const start = nums(wire.getAttribute('StartCoord'));
+  const end = nums(wire.getAttribute('EndCoord'));
+  if (start.length < 3 || end.length < 3) return null;
+  const a = new THREE.Vector3(start[0], start[1], start[2]);
+  const b = new THREE.Vector3(end[0], end[1], end[2]);
+  const dir = new THREE.Vector3().subVectors(b, a);
+  const length = dir.length();
+  if (length <= 1e-6) return null;
+  const radius = attrNum(wire, 'D', 2) / 2;
+  const geo = new THREE.CylinderGeometry(radius, radius, length, 8);
+  geo.rotateX(Math.PI / 2);
+  const center = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5);
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir.normalize());
+  geo.applyMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(q));
+  geo.translate(center.x, center.y, center.z);
+  return geo;
+}
+
+function parsePointList(value: string | null): THREE.Vector3[] {
+  return (value || '').split(';')
+    .map((part) => nums(part))
+    .filter((part) => part.length >= 3)
+    .map((part) => new THREE.Vector3(part[0], part[1], part[2]));
+}
+
+function polygonNormal(points: THREE.Vector3[]): THREE.Vector3 {
+  const normal = new THREE.Vector3();
+  for (let i = 0; i < points.length; i++) {
+    const current = points[i];
+    const next = points[(i + 1) % points.length];
+    normal.x += (current.y - next.y) * (current.z + next.z);
+    normal.y += (current.z - next.z) * (current.x + next.x);
+    normal.z += (current.x - next.x) * (current.y + next.y);
+  }
+  return normal.lengthSq() > 1e-12 ? normal.normalize() : new THREE.Vector3(0, 0, 1);
+}
+
+function stretchedBodyGeometry(stretched: Element): THREE.BufferGeometry | null {
+  const points = parsePointList(stretched.getAttribute('Array'));
+  if (points.length < 3) return null;
+  const normalValues = nums(stretched.getAttribute('Normal'));
+  const normal = normalValues.length >= 3 ? new THREE.Vector3(normalValues[0], normalValues[1], normalValues[2]) : polygonNormal(points);
+  if (normal.lengthSq() <= 1e-12) normal.copy(polygonNormal(points));
+  normal.normalize();
+  const length = attrNum(stretched, 'L', 1);
+  const extrusion = normal.clone().multiplyScalar(length);
+
+  const basisX = new THREE.Vector3().subVectors(points[1], points[0]);
+  if (basisX.lengthSq() <= 1e-12) return null;
+  basisX.normalize();
+  const basisY = new THREE.Vector3().crossVectors(normal, basisX).normalize();
+  if (basisY.lengthSq() <= 1e-12) return null;
+  const points2d = points.map((point) => new THREE.Vector2(point.dot(basisX), point.dot(basisY)));
+  const triangles = THREE.ShapeUtils.triangulateShape(points2d, []);
+  if (triangles.length === 0) return null;
+
+  const vertices: number[] = [];
+  const indices: number[] = [];
+  for (const point of points) vertices.push(point.x, point.y, point.z);
+  for (const point of points) {
+    const back = point.clone().add(extrusion);
+    vertices.push(back.x, back.y, back.z);
+  }
+
+  for (const tri of triangles) indices.push(tri[0], tri[1], tri[2]);
+  const offset = points.length;
+  for (const tri of triangles) indices.push(offset + tri[2], offset + tri[1], offset + tri[0]);
+  for (let i = 0; i < points.length; i++) {
+    const next = (i + 1) % points.length;
+    indices.push(i, next, offset + next, i, offset + next, offset + i);
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
 function geometryFromEntity(entity: Element): THREE.BufferGeometry | null {
   const cuboid = childByTag(entity, 'Cuboid');
   if (cuboid) {
@@ -164,24 +327,84 @@ function geometryFromEntity(entity: Element): THREE.BufferGeometry | null {
 
   const bushing = childByTag(entity, 'PorcelainBushing');
   if (bushing) {
-    const r = Number(bushing.getAttribute('R') || 20);
-    const r1 = Number(bushing.getAttribute('R1') || r * 1.3);
-    const h = Number(bushing.getAttribute('H') || 100);
-    const geo = new THREE.CylinderGeometry(r1, r, h, 32);
+    const r = attrNum(bushing, 'R', 20);
+    const r1 = Math.max(attrNum(bushing, 'R1', r * 1.3), attrNum(bushing, 'R2', r));
+    return ribbedInsulatorGeometry(r, r1, attrNum(bushing, 'H', 100), attrNum(bushing, 'N', 8));
+  }
+
+  const ring = childByTag(entity, 'Ring');
+  if (ring) {
+    const major = attrNum(ring, 'R', 1) + attrNum(ring, 'DR', 0.2);
+    const tube = Math.max(attrNum(ring, 'DR', 0.2), 0.001);
+    const arc = attrNum(ring, 'Rad', Math.PI * 2);
+    const geo = new THREE.TorusGeometry(major, tube, 12, 48, arc > 0 ? arc : Math.PI * 2);
     geo.rotateX(Math.PI / 2);
     return geo;
   }
 
-  const stretched = childByTag(entity, 'StretchedBody');
-  if (stretched) {
-    const points = (stretched.getAttribute('Array') || '').split(';')
-      .map((p) => nums(p)).filter((p) => p.length >= 2)
-      .map((p) => new THREE.Vector2(p[0], p[1]));
-    if (points.length >= 3) {
-      const shape = new THREE.Shape(points);
-      return new THREE.ExtrudeGeometry(shape, { depth: Number(stretched.getAttribute('L') || 1), bevelEnabled: false });
-    }
+  const cone = childByTag(entity, 'TruncatedCone');
+  if (cone) {
+    const geo = new THREE.CylinderGeometry(attrNum(cone, 'TR', 1), attrNum(cone, 'BR', 1), attrNum(cone, 'H', 1), 48);
+    geo.rotateX(Math.PI / 2);
+    return geo;
   }
+
+  const sphere = childByTag(entity, 'Sphere');
+  if (sphere) return new THREE.SphereGeometry(attrNum(sphere, 'R', 1), 32, 16);
+
+  const gasket = childByTag(entity, 'CircularGasket');
+  if (gasket) {
+    return pipeGeometry(attrNum(gasket, 'OR', 1), attrNum(gasket, 'IR', 0.5), attrNum(gasket, 'H', 0.1));
+  }
+
+  const ellipsoid = childByTag(entity, 'RotationalEllipsoid');
+  if (ellipsoid) {
+    const geo = new THREE.SphereGeometry(1, 32, 16);
+    geo.scale(attrNum(ellipsoid, 'LR', 1), attrNum(ellipsoid, 'WR', 1), attrNum(ellipsoid, 'H', 1));
+    return geo;
+  }
+
+  const wire = childByTag(entity, 'Wire');
+  if (wire) return wireGeometry(wire);
+
+  const insulator = childByTag(entity, 'Insulator');
+  if (insulator) {
+    const core = Math.max(attrNum(insulator, 'R', 1), attrNum(insulator, 'R2', 1));
+    const skirt = Math.max(core, attrNum(insulator, 'R1', core * 1.4));
+    const height = Math.max(attrNum(insulator, 'H1', 1) * Math.max(attrNum(insulator, 'N1', 1), 1), attrNum(insulator, 'D', 1));
+    return ribbedInsulatorGeometry(core, skirt, height, attrNum(insulator, 'N1', attrNum(insulator, 'N', 8)));
+  }
+
+  const terminal = childByTag(entity, 'TerminalBlock');
+  if (terminal) {
+    return new THREE.BoxGeometry(attrNum(terminal, 'L', 1), attrNum(terminal, 'W', 1), attrNum(terminal, 'T', attrNum(terminal, 'H', 1)));
+  }
+
+  const offsetTable = childByTag(entity, 'OffsetRectangularTable');
+  if (offsetTable) {
+    return new THREE.BoxGeometry(attrNum(offsetTable, 'LL', attrNum(offsetTable, 'TL', 1)), attrNum(offsetTable, 'LW', attrNum(offsetTable, 'TW', 1)), attrNum(offsetTable, 'H', 1));
+  }
+
+  const roundTube = childByTag(entity, 'RoundSteelTube');
+  if (roundTube) {
+    const r = attrNum(roundTube, 'R', attrNum(roundTube, 'OR', attrNum(roundTube, 'D', 2) / 2));
+    const inner = attrNum(roundTube, 'IR', Math.max(0, r - attrNum(roundTube, 'T', r * 0.2)));
+    return pipeGeometry(r, inner, attrNum(roundTube, 'L', attrNum(roundTube, 'H', 1)));
+  }
+
+  const angleSteel = childByTag(entity, 'EquilateralAngleSteel');
+  if (angleSteel) {
+    const l = attrNum(angleSteel, 'L', 1);
+    const w = attrNum(angleSteel, 'W', attrNum(angleSteel, 'B', 1));
+    const t = attrNum(angleSteel, 'T', w * 0.1);
+    return new THREE.BoxGeometry(l, w, t);
+  }
+
+  const flatSteel = childByTag(entity, 'FlatSteel');
+  if (flatSteel) return new THREE.BoxGeometry(attrNum(flatSteel, 'L', 1), attrNum(flatSteel, 'W', 1), attrNum(flatSteel, 'T', 1));
+
+  const stretched = childByTag(entity, 'StretchedBody');
+  if (stretched) return stretchedBodyGeometry(stretched);
 
   return null;
 }
@@ -272,13 +495,30 @@ async function buildMod(path: string, ctx: BuildContext, overrideColor?: string)
 
     const doc = new DOMParser().parseFromString(text, 'application/xml');
     const entities = Array.from(doc.getElementsByTagName('*')).filter((el) => el.tagName.toLowerCase() === 'entity');
+    const geometryById = new Map<string, THREE.BufferGeometry>();
     for (const entity of entities) {
-      if ((entity.getAttribute('Visible') || 'True').toLowerCase() === 'false') continue;
-      const geo = geometryFromEntity(entity);
+      const id = entity.getAttribute('ID') || '';
+      const visible = (entity.getAttribute('Visible') || 'True').toLowerCase() !== 'false';
+      let geo = geometryFromEntity(entity);
+
+      // Several MOD files use Boolean entities as the final visible shape. The
+      // Unity reference parser keeps Boolean CSG disabled by default and simply
+      // aliases the Boolean result to Entity1. Doing the same here prevents
+      // Boolean-heavy models from becoming blank while avoiding fragile CSG in
+      // the browser.
+      const boolean = childByTag(entity, 'Boolean');
+      if (!geo && boolean) {
+        const sourceId = boolean.getAttribute('Entity1') || '';
+        const source = geometryById.get(sourceId);
+        if (source) geo = source.clone();
+      }
+
       if (!geo) continue;
+      if (id) geometryById.set(id, geo.clone());
+      if (!visible) continue;
       const mat = colorMaterial(childByTag(entity, 'Color'), overrideColor);
       const mesh = decorateMesh(new THREE.Mesh(geo, mat));
-      mesh.name = `${path}#${entity.getAttribute('ID') || ''}`;
+      mesh.name = `${path}#${id}`;
       applyGimTransform(mesh, childByTag(entity, 'TransformMatrix')?.getAttribute('Value'));
       group.add(mesh);
     }
@@ -299,14 +539,11 @@ async function buildPhm(path: string, ctx: BuildContext): Promise<THREE.Object3D
     group.name = path;
     if (!text) return group;
 
-    const kv = parseKeyValue(text);
-    const count = Number(kv['SOLIDMODELS.NUM'] || 0);
-    for (let i = 0; i < count; i++) {
-      const ref = kv[`SOLIDMODEL${i}`];
-      if (!ref) continue;
-      const child = await buildSolidRef(ref, ctx, kv[`COLOR${i}`]);
+    const entries = parseKeyValueEntries(text);
+    for (const { ref, transform, color } of modelsAfterCount(entries, 'SOLIDMODELS.NUM', 'SOLIDMODEL', 3)) {
+      const child = await buildSolidRef(ref, ctx, color);
       if (!child) continue;
-      applyGimTransform(child, kv[`TRANSFORMMATRIX${i}`]);
+      applyGimTransform(child, transform);
       group.add(child);
     }
     return group;
@@ -326,22 +563,18 @@ async function buildDev(path: string, ctx: BuildContext): Promise<THREE.Object3D
     group.name = path;
     if (!text) return group;
 
-    const kv = parseKeyValue(text);
-    const solidCount = Number(kv['SOLIDMODELS.NUM'] || 0);
-    for (let i = 0; i < solidCount; i++) {
-      const ref = kv[`SOLIDMODEL${i}`];
-      if (!ref) continue;
+    const entries = parseKeyValueEntries(text);
+    for (const { ref, transform } of modelsAfterCount(entries, 'SOLIDMODELS.NUM', 'SOLIDMODEL', 2)) {
       const child = await buildSolidRef(ref, ctx);
       if (!child) continue;
-      applyGimTransform(child, kv[`TRANSFORMMATRIX${i}`]);
+      applyGimTransform(child, transform);
       group.add(child);
     }
 
-    const subCount = Number(kv['SUBDEVICES.NUM'] || 0);
-    for (let i = 0; i < subCount; i++) {
-      const ref = kv[`SUBDEVICES${i}`] || kv[`SUBDEVICE${i}`];
-      if (!ref) continue;
-      group.add(await buildDev(`DEV/${ref}`, ctx));
+    for (const { ref, transform } of modelsAfterCount(entries, 'SUBDEVICES.NUM', 'SUBDEVICE', 2)) {
+      const child = await buildDev(`DEV/${ref}`, ctx);
+      applyGimTransform(child, transform);
+      group.add(child);
     }
     return group;
   })();
@@ -369,38 +602,66 @@ function normalizeForViewing(group: THREE.Group): THREE.Group {
   return wrapper;
 }
 
-function collectDeviceNodes(node: CbmNode | null, out: CbmNode[] = []): CbmNode[] {
-  if (!node) return out;
-  if (node.devPath) out.push(node);
-  for (const child of node.children) collectDeviceNodes(child, out);
-  return out;
+async function addRenderableCbmNode(node: CbmNode | null, root: THREE.Group, buildCtx: BuildContext): Promise<boolean> {
+  if (!node) return false;
+
+  // Prefer the node's OBJECTMODELPOINTER as the complete device model. If it
+  // really contains renderable geometry, do not render SUBDEVICES again; those
+  // children are often engineering/property children and double-rendering them
+  // is the main cause of severe part drift. If the pointed DEV is only a shell
+  // or metadata file, recurse into children so single-device packages whose
+  // actual geometry lives in child nodes do not become blank.
+  if (node.devPath) {
+    const dev = await buildDev(`DEV/${node.devPath}`, buildCtx);
+    if (dev.children.length > 0) {
+      dev.name = node.name;
+      applyGimTransform(dev, node.transformMatrix);
+      root.add(dev);
+      return true;
+    }
+  }
+
+  let added = false;
+  for (const child of node.children) {
+    added = (await addRenderableCbmNode(child, root, buildCtx)) || added;
+  }
+  return added;
 }
 
 export async function loadGimGeometryModel(ctx: ViewerContext, state: AppState, files: Map<string, File>): Promise<string | null> {
   let root = new THREE.Group();
   root.name = 'GIM 几何模型';
   const buildCtx: BuildContext = { files, pathIndex: makePathIndex(files), modCache: new Map(), phmCache: new Map(), devCache: new Map(), stlCache: new Map() };
-  const nodes = collectDeviceNodes(state.currentCbmTree);
-
-  if (nodes.length > 0) {
-    for (const node of nodes) {
-      const dev = await buildDev(`DEV/${node.devPath}`, buildCtx);
-      if (dev.children.length === 0) continue;
-      dev.name = node.name;
-      applyGimTransform(dev, node.transformMatrix);
-      root.add(dev);
-    }
-  }
+  await addRenderableCbmNode(state.currentCbmTree, root, buildCtx);
 
   // Some GIM variants, especially line projects, use CBM hierarchy keys that are not
   // part of the common substation subset. If the CBM walk did not produce renderable
-  // device nodes, fall back to rendering every DEV model found in the package.
+  // device nodes, fall back to top-level DEV models instead of every nested DEV,
+  // avoiding duplicate child devices that drift the assembled model.
   if (root.children.length === 0) {
-    for (const devPath of refsInFolder(buildCtx, 'DEV', '.dev')) {
+    for (const devPath of await collectRootDevPaths(buildCtx)) {
       const dev = await buildDev(devPath, buildCtx);
       if (dev.children.length === 0) continue;
       dev.name = devPath.split('/').pop() || devPath;
       root.add(dev);
+    }
+  }
+
+  if (root.children.length === 0) {
+    for (const phmPath of refsInFolder(buildCtx, 'PHM', '.phm')) {
+      const phm = await buildPhm(phmPath, buildCtx);
+      if (phm.children.length === 0) continue;
+      phm.name = phmPath.split('/').pop() || phmPath;
+      root.add(phm);
+    }
+  }
+
+  if (root.children.length === 0) {
+    for (const modPath of refsInFolder(buildCtx, 'MOD', '.mod')) {
+      const mod = await buildMod(modPath, buildCtx);
+      if (mod.children.length === 0) continue;
+      mod.name = modPath.split('/').pop() || modPath;
+      root.add(mod);
     }
   }
 
