@@ -10,26 +10,98 @@ export function parseKeyValue(text: string): Record<string, string> {
   return result;
 }
 
+function parseKeyValues(text: string): Map<string, string[]> {
+  const result = new Map<string, string[]>();
+  for (const line of text.split(/\r?\n/)) {
+    const idx = line.indexOf('=');
+    if (idx <= 0) continue;
+    const key = line.slice(0, idx).trim();
+    const value = line.slice(idx + 1).trim();
+    const values = result.get(key);
+    if (values) values.push(value); else result.set(key, [value]);
+  }
+  return result;
+}
+
+function latest(kv: Map<string, string[]>, key: string): string {
+  const values = kv.get(key);
+  return values?.[values.length - 1] ?? '';
+}
+
+function values(kv: Map<string, string[]>, key: string): string[] {
+  return kv.get(key) ?? [];
+}
+
+function indexedValues(kv: Map<string, string[]>, countKey: string, keyPrefixes: string[]): string[] {
+  const result: string[] = [];
+  const count = Number(latest(kv, countKey) || 0);
+  for (let i = 0; i < count; i++) {
+    for (const prefix of keyPrefixes) {
+      const value = latest(kv, `${prefix}${i}`);
+      if (value) { result.push(value); break; }
+    }
+  }
+  return result;
+}
+
+function makePathIndex(files: Map<string, File>): Map<string, string> {
+  const index = new Map<string, string>();
+  for (const path of files.keys()) index.set(path.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase(), path);
+  return index;
+}
+
+function resolvePath(pathIndex: Map<string, string>, folder: string, ref: string): string | null {
+  const wanted = `${folder}/${ref}`.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+  const exact = pathIndex.get(wanted);
+  if (exact) return exact;
+  const fileName = ref.replace(/\\/g, '/').split('/').pop()?.toLowerCase();
+  if (!fileName) return null;
+  for (const [key, original] of pathIndex) {
+    if ((key.endsWith(`/${fileName}`) || key === fileName) && key.includes(`${folder.toLowerCase()}/`)) return original;
+  }
+  return null;
+}
+
 /** 从文件集合递归构建 CBM 层级树 */
 export async function buildCbmTree(files: Map<string, File>): Promise<CbmNode | null> {
   const visited = new Set<string>();
+  const pathIndex = makePathIndex(files);
   async function build(p: string): Promise<CbmNode | null> {
-    if (visited.has(p)) return null; visited.add(p);
-    const f = files.get(p); if (!f) return null;
-    const kv = parseKeyValue(await f.text());
-    const en = kv['ENTITYNAME'] || '';
-    const cn = kv['SYSCLASSIFYNAME'] || kv['PARTNAME'] || '';
-    const dn = cn || en || p.split('/').pop()!;
+    const resolved = pathIndex.get(p.toLowerCase()) ?? p;
+    if (visited.has(resolved)) return null; visited.add(resolved);
+    const f = files.get(resolved); if (!f) return null;
+    const kv = parseKeyValues(await f.text());
+    const en = latest(kv, 'ENTITYNAME');
+    const cn = latest(kv, 'SYSCLASSIFYNAME') || latest(kv, 'PARTNAME');
+    const dn = cn || en || resolved.split('/').pop()!;
     const children: CbmNode[] = [];
-    const sg = kv['SUBSYSTEM']; if (sg) { const c = await build(`CBM/${sg}`); if (c) children.push(c); }
-    const sn = parseInt(kv['SUBSYSTEMS.NUM'] || '0', 10);
-    for (let i = 0; i < sn; i++) { const s = kv[`SUBSYSTEM${i}`]; if (s) { const c = await build(`CBM/${s}`); if (c) children.push(c); } }
-    const dn2 = parseInt(kv['SUBDEVICES.NUM'] || '0', 10);
-    for (let i = 0; i < dn2; i++) { const s = kv[`SUBDEVICE${i}`]; if (s) { const c = await build(`CBM/${s}`); if (c) children.push(c); } }
-    return { path: p, name: dn, entityName: en, children, famPath: kv['BASEFAMILY'] || '', devPath: kv['OBJECTMODELPOINTER'] || '', ifcFile: kv['IFCFILE'] || '', ifcGuid: (kv['IFCGUID'] || '').replace(/\$+$/, '').trim(), classifyName: cn, transformMatrix: kv['TRANSFORMMATRIX'] || '' };
+    const childRefs = [
+      ...values(kv, 'SUBSYSTEM'),
+      ...indexedValues(kv, 'SUBSYSTEMS.NUM', ['SUBSYSTEM']),
+      ...indexedValues(kv, 'SUBDEVICES.NUM', ['SUBDEVICES', 'SUBDEVICE']),
+    ];
+    for (const ref of childRefs) {
+      const childPath = resolvePath(pathIndex, 'CBM', ref);
+      if (!childPath) continue;
+      const c = await build(childPath);
+      if (c) children.push(c);
+    }
+    return {
+      path: resolved,
+      name: dn,
+      entityName: en,
+      children,
+      famPath: latest(kv, 'BASEFAMILY'),
+      devPath: latest(kv, 'OBJECTMODELPOINTER'),
+      ifcFile: latest(kv, 'IFCFILE'),
+      ifcGuid: latest(kv, 'IFCGUID').replace(/\$+$/, '').trim(),
+      classifyName: cn,
+      transformMatrix: latest(kv, 'TRANSFORMMATRIX'),
+    };
   }
-  if (!files.has('CBM/project.cbm')) return null;
-  return build('CBM/project.cbm');
+  const root = pathIndex.get('cbm/project.cbm');
+  if (!root) return null;
+  return build(root);
 }
 
 /** 构建 CBM 文件名 → CbmNode 索引 */
