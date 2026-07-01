@@ -377,30 +377,63 @@ function createGeometry(entity: Element): THREE.BufferGeometry | null {
   return primitive ? createFallbackGeometry(primitive) : null;
 }
 
+
+interface PendingBooleanEntity {
+  id: string;
+  visible: boolean;
+  element: Element;
+}
+
+function cloneMesh(mesh: THREE.Mesh, name: string): THREE.Mesh {
+  const clone = mesh.clone();
+  clone.geometry = mesh.geometry.clone();
+  clone.material = mesh.material;
+  clone.name = name;
+  return clone;
+}
+
+function mergeMeshesForBooleanUnion(a: THREE.Mesh, b: THREE.Mesh, name: string): THREE.Mesh {
+  const geometryA = a.geometry.clone();
+  geometryA.applyMatrix4(a.matrix);
+  const geometryB = b.geometry.clone();
+  geometryB.applyMatrix4(b.matrix);
+  const merged = mergeBufferGeometries([geometryA, geometryB]) || geometryA;
+  geometryA.dispose();
+  geometryB.dispose();
+  const mesh = new THREE.Mesh(merged, a.material);
+  mesh.name = name;
+  return mesh;
+}
+
+function resolveBooleanMesh(item: PendingBooleanEntity, meshByEntityId: Map<string, THREE.Mesh>, name: string): THREE.Mesh | null {
+  const boolean = item.element.querySelector('Boolean');
+  if (!boolean) return null;
+  const entity1 = boolean.getAttribute('Entity1') || '';
+  const entity2 = boolean.getAttribute('Entity2') || '';
+  const type = (boolean.getAttribute('Type') || 'Difference').toLowerCase();
+  const source1 = meshByEntityId.get(entity1);
+  if (!source1) return null;
+  const source2 = meshByEntityId.get(entity2);
+  if (type === 'union' && source2) return mergeMeshesForBooleanUnion(source1, source2, name);
+
+  // Difference/Intersection 没有轻量 CSG 时，优先保留主实体，避免整件消失；这与原 Unity 解析器禁用 CSG 时的稳定策略一致。
+  return cloneMesh(source1, name);
+}
+
 async function renderMod(ctx: RenderContext, path: string, parent: THREE.Object3D, inheritedColor?: string): Promise<void> {
   const file = ctx.files.get(path);
   if (!file) return;
   const doc = new DOMParser().parseFromString(await file.text(), 'application/xml');
   const entities = Array.from(doc.querySelectorAll('Entity'));
   const meshByEntityId = new Map<string, THREE.Mesh>();
+  const pendingBooleans: PendingBooleanEntity[] = [];
   ctx.stats.modCount += 1;
 
   for (const entity of entities) {
     const id = entity.getAttribute('ID') || `${ctx.stats.meshCount}`;
     const visible = (entity.getAttribute('Visible') || 'True').toLowerCase() !== 'false';
-    const boolean = entity.querySelector('Boolean');
-    if (boolean) {
-      const source = meshByEntityId.get(boolean.getAttribute('Entity1') || '');
-      if (source) {
-        const clone = source.clone();
-        clone.material = source.material;
-        clone.name = `${path}#${id}`;
-        meshByEntityId.set(id, clone);
-        if (visible) {
-          parent.add(clone);
-          ctx.stats.meshCount += 1;
-        }
-      }
+    if (entity.querySelector('Boolean')) {
+      pendingBooleans.push({ id, visible, element: entity });
       continue;
     }
 
@@ -415,6 +448,24 @@ async function renderMod(ctx: RenderContext, path: string, parent: THREE.Object3
     if (!visible) continue;
     parent.add(mesh);
     ctx.stats.meshCount += 1;
+  }
+
+  const unresolved = new Set(pendingBooleans.map((item) => item.id));
+  let progressed = true;
+  while (progressed && unresolved.size > 0) {
+    progressed = false;
+    for (const item of pendingBooleans) {
+      if (!unresolved.has(item.id)) continue;
+      const mesh = resolveBooleanMesh(item, meshByEntityId, `${path}#${item.id}`);
+      if (!mesh) continue;
+      meshByEntityId.set(item.id, mesh);
+      unresolved.delete(item.id);
+      progressed = true;
+      if (item.visible) {
+        parent.add(mesh);
+        ctx.stats.meshCount += 1;
+      }
+    }
   }
 }
 
