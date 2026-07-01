@@ -234,6 +234,99 @@ function createFallbackGeometry(el: Element): THREE.BufferGeometry | null {
   return makeZAxisBox(size, size, size);
 }
 
+
+function parseVector(value = ''): THREE.Vector3 | null {
+  const nums = parseNumbers(value);
+  if (nums.length < 3) return null;
+  return new THREE.Vector3(nums[0], nums[1], nums[2]);
+}
+
+function createWireGeometry(el: Element): THREE.BufferGeometry | null {
+  const start = parseVector(el.getAttribute('StartCoord') || '');
+  const end = parseVector(el.getAttribute('EndCoord') || '');
+  if (!start || !end) return createFallbackGeometry(el);
+  const delta = end.clone().sub(start);
+  const length = delta.length();
+  if (length <= 0) return null;
+  const radius = Number(el.getAttribute('D') || el.getAttribute('R') || 1) / 2;
+  const geometry = makeZAxisCylinder(Math.max(radius, 0.1), Math.max(radius, 0.1), length, 12);
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), delta.normalize());
+  const center = start.clone().add(end).multiplyScalar(0.5);
+  geometry.applyMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(q));
+  geometry.translate(center.x, center.y, center.z);
+  return geometry;
+}
+
+function createCircularGasketGeometry(el: Element): THREE.BufferGeometry {
+  const outer = Number(el.getAttribute('OR') || el.getAttribute('R') || 1);
+  const inner = Number(el.getAttribute('IR') || Math.max(outer * 0.6, 0.1));
+  const height = Number(el.getAttribute('H') || el.getAttribute('T') || 1);
+  const shape = new THREE.Shape();
+  shape.absarc(0, 0, outer, 0, Math.PI * 2, false);
+  const hole = new THREE.Path();
+  hole.absarc(0, 0, inner, 0, Math.PI * 2, true);
+  shape.holes.push(hole);
+  return new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false, curveSegments: 48 });
+}
+
+function createInsulatorGeometry(el: Element): THREE.BufferGeometry {
+  const n1 = Math.max(1, Number(el.getAttribute('N1') || el.getAttribute('N') || 4));
+  const h1 = Number(el.getAttribute('H1') || 20);
+  const fl = Number(el.getAttribute('FL') || 0);
+  const al = Number(el.getAttribute('AL') || 0);
+  const r = Number(el.getAttribute('R') || 10);
+  const r1 = Number(el.getAttribute('R1') || r * 1.35);
+  const r2 = Number(el.getAttribute('R2') || r * 1.1);
+  const total = fl + n1 * h1 + al;
+  const group = new THREE.Group();
+  const core = new THREE.Mesh(makeZAxisCylinder(r, r, Math.max(total, 1)));
+  group.add(core);
+  for (let i = 0; i < n1; i++) {
+    const skirt = new THREE.Mesh(makeZAxisCylinder(i % 2 === 0 ? r2 : r1, r, h1 * 0.45, 24));
+    skirt.position.z = fl + i * h1 + h1 * 0.25;
+    group.add(skirt);
+  }
+  group.updateMatrixWorld(true);
+  const geometries: THREE.BufferGeometry[] = [];
+  group.traverse((obj) => {
+    if (obj instanceof THREE.Mesh) {
+      const geometry = obj.geometry.clone();
+      geometry.applyMatrix4(obj.matrixWorld);
+      geometries.push(geometry);
+    }
+  });
+  const merged = mergeBufferGeometries(geometries);
+  for (const geometry of geometries) geometry.dispose();
+  return merged || makeZAxisCylinder(r, r, Math.max(total, 1));
+}
+
+function mergeBufferGeometries(geometries: THREE.BufferGeometry[]): THREE.BufferGeometry | null {
+  if (geometries.length === 0) return null;
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const indices: number[] = [];
+  let vertexOffset = 0;
+  for (const geometry of geometries) {
+    const pos = geometry.getAttribute('position');
+    if (!pos) continue;
+    const normal = geometry.getAttribute('normal');
+    for (let i = 0; i < pos.count; i++) {
+      positions.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+      if (normal) normals.push(normal.getX(i), normal.getY(i), normal.getZ(i));
+    }
+    const index = geometry.getIndex();
+    if (index) for (let i = 0; i < index.count; i++) indices.push(index.getX(i) + vertexOffset);
+    else for (let i = 0; i < pos.count; i++) indices.push(i + vertexOffset);
+    vertexOffset += pos.count;
+  }
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  if (normals.length === positions.length) merged.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  merged.setIndex(indices);
+  if (normals.length !== positions.length) merged.computeVertexNormals();
+  return merged;
+}
+
 function createGeometry(entity: Element): THREE.BufferGeometry | null {
   const cuboid = entity.querySelector('Cuboid');
   if (cuboid) return makeZAxisBox(Number(cuboid.getAttribute('L') || 1), Number(cuboid.getAttribute('W') || 1), Number(cuboid.getAttribute('H') || 1));
@@ -250,7 +343,7 @@ function createGeometry(entity: Element): THREE.BufferGeometry | null {
   const sphere = entity.querySelector('Sphere');
   if (sphere) return new THREE.SphereGeometry(Number(sphere.getAttribute('R') || sphere.getAttribute('Radius') || 1), 32, 16);
   const gasket = entity.querySelector('CircularGasket');
-  if (gasket) return new THREE.TorusGeometry(Number(gasket.getAttribute('R') || 1), Number(gasket.getAttribute('DR') || gasket.getAttribute('T') || 0.2), 12, 40);
+  if (gasket) return createCircularGasketGeometry(gasket);
   const ellipsoid = entity.querySelector('RotationalEllipsoid');
   if (ellipsoid) {
     const geometry = new THREE.SphereGeometry(1, 32, 16);
@@ -266,7 +359,9 @@ function createGeometry(entity: Element): THREE.BufferGeometry | null {
   const offsetTable = entity.querySelector('OffsetRectangularTable');
   if (offsetTable) return makeZAxisBox(Number(offsetTable.getAttribute('L') || 1), Number(offsetTable.getAttribute('W') || 1), Number(offsetTable.getAttribute('H') || offsetTable.getAttribute('T') || 1));
   const wire = entity.querySelector('Wire');
-  if (wire) return makeZAxisCylinder(Number(wire.getAttribute('R') || wire.getAttribute('DR') || 1), Number(wire.getAttribute('R') || wire.getAttribute('DR') || 1), Number(wire.getAttribute('L') || wire.getAttribute('H') || 1), 12);
+  if (wire) return createWireGeometry(wire);
+  const insulator = entity.querySelector('Insulator');
+  if (insulator) return createInsulatorGeometry(insulator);
   const angle = entity.querySelector('EquilateralAngleSteel');
   if (angle) {
     const length = Number(angle.getAttribute('L') || 1);
@@ -287,20 +382,42 @@ async function renderMod(ctx: RenderContext, path: string, parent: THREE.Object3
   if (!file) return;
   const doc = new DOMParser().parseFromString(await file.text(), 'application/xml');
   const entities = Array.from(doc.querySelectorAll('Entity'));
+  const meshByEntityId = new Map<string, THREE.Mesh>();
   ctx.stats.modCount += 1;
+
   for (const entity of entities) {
-    if ((entity.getAttribute('Visible') || 'True').toLowerCase() === 'false') continue;
+    const id = entity.getAttribute('ID') || `${ctx.stats.meshCount}`;
+    const visible = (entity.getAttribute('Visible') || 'True').toLowerCase() !== 'false';
+    const boolean = entity.querySelector('Boolean');
+    if (boolean) {
+      const source = meshByEntityId.get(boolean.getAttribute('Entity1') || '');
+      if (source) {
+        const clone = source.clone();
+        clone.material = source.material;
+        clone.name = `${path}#${id}`;
+        meshByEntityId.set(id, clone);
+        if (visible) {
+          parent.add(clone);
+          ctx.stats.meshCount += 1;
+        }
+      }
+      continue;
+    }
+
     const geometry = createGeometry(entity);
     if (!geometry) continue;
     const colorEl = entity.querySelector('Color');
     const material = makeMaterial(parseColor(colorEl, inheritedColor), parseOpacity(colorEl));
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = `${path}#${entity.getAttribute('ID') || ctx.stats.meshCount}`;
+    mesh.name = `${path}#${id}`;
     mesh.applyMatrix4(parseMatrix(entity.querySelector('TransformMatrix')?.getAttribute('Value') || ''));
+    meshByEntityId.set(id, mesh);
+    if (!visible) continue;
     parent.add(mesh);
     ctx.stats.meshCount += 1;
   }
 }
+
 
 async function renderPhm(ctx: RenderContext, path: string, parent: THREE.Object3D): Promise<void> {
   if (ctx.visitingPhm.has(path)) return;
