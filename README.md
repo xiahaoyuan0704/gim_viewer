@@ -26,12 +26,13 @@
 ```bash
 npm run dev          # 启动 Web 版 Vite 开发服务器
 npm run build        # TypeScript 编译 + Vite 生产构建
-npm run electron:dev # 构建前端并启动 Electron 桌面端
-npm run desktop:pack # 生成 Electron 未打包目录
-npm run desktop:dist # 生成平台安装包
+npm run electron:dev # 构建前端并通过 npx 启动 Electron 桌面端
+npm run desktop:dev  # electron:dev 的别名
+npm run desktop:pack # 通过 npx electron-builder 生成未打包目录
+npm run desktop:dist # 通过 npx electron-builder 生成平台安装包
 ```
 
-如果需要运行桌面端命令，请确保本地能够安装 `electron` 和 `electron-builder`。在受限网络环境下，可能需要配置可访问的 npm 镜像源。
+普通 Web 开发只需要 `npm install && npm run dev`。Electron 不再放在默认 devDependencies 中，避免受限网络下安装 Electron 失败影响 Vite/esbuild；只有运行桌面端命令时才会通过 `npx` 按需下载 `electron` 或 `electron-builder`。如果网络受限，请先配置可访问的 npm 镜像源，或在本机全局/本地安装 Electron 后再运行桌面端命令。
 
 ## 项目结构
 
