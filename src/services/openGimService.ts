@@ -12,6 +12,7 @@ import { openIfcModal, getModalSelectedEntries, closeIfcModal } from '../ui/ifcS
 import { buildAndRenderCbmTree } from '../ui/cbmTreeView.js';
 import { renderFileDevPanel } from '../ui/fileDevView.js';
 import { loadingEl, emptyTipEl, gimFileInput, btnLoadGim } from '../ui/dom.js';
+import { isDesktopRuntime, toArrayBuffer } from '../desktop/electron.js';
 
 function showLoading(text: string) { loadingEl.textContent = text; loadingEl.style.display = 'block'; }
 function hideLoading() { loadingEl.style.display = 'none'; }
@@ -79,7 +80,29 @@ export async function loadSelectedIfcFiles(ctx: ViewerContext, state: AppState, 
 
 /** 绑定 GIM 文件打开事件 */
 export function setupOpenGimService(ctx: ViewerContext, state: AppState, showMessage: (text: string) => void): void {
-  btnLoadGim.addEventListener('click', () => gimFileInput.click());
+  btnLoadGim.addEventListener('click', async () => {
+    if (!isDesktopRuntime()) {
+      gimFileInput.click();
+      return;
+    }
+
+    btnLoadGim.disabled = true;
+    try {
+      const selectedFile = await window.gimDesktop?.openGimFile();
+      if (!selectedFile) return;
+      showLoading(`正在解压 GIM 文件: ${selectedFile.name}...`);
+      const { extractGimFile } = await import('../gim/gimExtractor.js');
+      const extracted = await extractGimFile(toArrayBuffer(selectedFile.data));
+      const entries = await onGimExtracted(ctx, state, extracted, showMessage);
+      if (entries.length === 0) { showLoading('未在 GIM 文件中找到 IFC 文件'); setTimeout(hideLoading, 2000); return; }
+      hideLoading();
+      openIfcModal(entries);
+    } catch (err) {
+      console.error(err);
+      showLoading(`GIM 解析失败: ${err instanceof Error ? err.message : String(err)}`);
+      setTimeout(hideLoading, 3000);
+    } finally { btnLoadGim.disabled = false; }
+  });
   gimFileInput.addEventListener('change', async () => {
     const files = Array.from(gimFileInput.files || []);
     if (files.length === 0) return;
