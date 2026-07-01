@@ -9,6 +9,7 @@ import { setupIfcSelectModal } from '../ui/ifcSelectModal.js';
 import { setupOpenGimService, loadSelectedIfcFiles } from '../services/openGimService.js';
 import { setupOpenIfcService } from '../services/openIfcService.js';
 import { resetHighlight } from '../viewer/highlight.js';
+import { removePreviousNativeRoot } from '../gim/nativeGimRenderer.js';
 import { container, btnClear, loadingEl } from '../ui/dom.js';
 import type { ModelEventCallbacks } from '../viewer/ifcLoader.js';
 
@@ -46,6 +47,7 @@ async function bootstrapAsync(): Promise<void> {
     for (const [modelId] of state.loadedModels) {
       ctx.fragments.core.disposeModel(modelId);
     }
+    removePreviousNativeRoot(ctx);
     state.reset();
     document.getElementById('model-list')!.innerHTML = '';
     document.getElementById('cbm-tree-panel')!.innerHTML = '';

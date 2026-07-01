@@ -13,6 +13,7 @@ import { buildAndRenderCbmTree } from '../ui/cbmTreeView.js';
 import { renderFileDevPanel } from '../ui/fileDevView.js';
 import { loadingEl, emptyTipEl, gimFileInput, btnLoadGim } from '../ui/dom.js';
 import { isDesktopRuntime, toArrayBuffer } from '../desktop/electron.js';
+import { renderNativeGimModel } from '../gim/nativeGimRenderer.js';
 
 function showLoading(text: string) { loadingEl.textContent = text; loadingEl.style.display = 'block'; }
 function hideLoading() { loadingEl.style.display = 'none'; }
@@ -94,7 +95,16 @@ export function setupOpenGimService(ctx: ViewerContext, state: AppState, showMes
       const { extractGimFile } = await import('../gim/gimExtractor.js');
       const extracted = await extractGimFile(toArrayBuffer(selectedFile.data));
       const entries = await onGimExtracted(ctx, state, extracted, showMessage);
-      if (entries.length === 0) { showLoading('未在 GIM 文件中找到 IFC 文件'); setTimeout(hideLoading, 2000); return; }
+      if (entries.length === 0) {
+        const nativeResult = await renderNativeGimModel(ctx, state, extracted);
+        if (nativeResult) {
+          emptyTipEl.style.display = 'none';
+          showLoading(`已加载 GIM 原生几何: ${nativeResult.meshCount} 个图元`);
+          setTimeout(hideLoading, 1800);
+          return;
+        }
+        showLoading('未在 GIM 文件中找到可渲染的 IFC/MOD/PHM/DEV 内容'); setTimeout(hideLoading, 3000); return;
+      }
       hideLoading();
       openIfcModal(entries);
     } catch (err) {
@@ -114,7 +124,16 @@ export function setupOpenGimService(ctx: ViewerContext, state: AppState, showMes
       const ab = await files[0].arrayBuffer();
       const extracted = await extractGimFile(ab);
       const entries = await onGimExtracted(ctx, state, extracted, showMessage);
-      if (entries.length === 0) { showLoading('未在 GIM 文件中找到 IFC 文件'); setTimeout(hideLoading, 2000); return; }
+      if (entries.length === 0) {
+        const nativeResult = await renderNativeGimModel(ctx, state, extracted);
+        if (nativeResult) {
+          emptyTipEl.style.display = 'none';
+          showLoading(`已加载 GIM 原生几何: ${nativeResult.meshCount} 个图元`);
+          setTimeout(hideLoading, 1800);
+          return;
+        }
+        showLoading('未在 GIM 文件中找到可渲染的 IFC/MOD/PHM/DEV 内容'); setTimeout(hideLoading, 3000); return;
+      }
       hideLoading();
       openIfcModal(entries);
     } catch (err) {

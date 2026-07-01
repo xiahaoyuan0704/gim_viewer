@@ -9,10 +9,11 @@
 - 通过 `CBM/project.cbm` 构建工程层级树，并发现其中引用的 IFC 模型。
 - 基于 `FileDevRelation.cbm` 建立 IFC 文件与设备节点之间的双向关系。
 - 使用 That Open + web-ifc 加载 IFC 几何，支持模型列表、点击拾取、高亮、相机定位和属性查看。
+- 当 GIM 包没有 IFC 或没有 CBM 时，自动从 DEV/PHM/MOD 关系或裸 MOD 文件渲染已有原生几何图元。
 - 在属性抽屉中展示 FAM 设计参数、DEV 设备信息、IFC 原生属性集等内容。
 - Electron 桌面端支持原生文件选择窗口打开 `.gim` 文件。
 
-> 说明：当前 3D 几何渲染仍以 GIM 包中引用的 IFC 文件为主；`MOD/`、`PHM/` 的专有几何/装配数据已随包解压并保留在索引中，可在后续版本继续扩展为原生 GIM 几何重建流程。
+> 说明：当前优先加载 GIM 包中引用的 IFC 文件；如果未发现 IFC，则会回退解析 `DEV/`、`PHM/`、`MOD/` 中的原生几何。已支持 MOD 中的长方体、圆柱体、瓷套管和拉伸体等基础图元，复杂专有图元/STL 可继续扩展。
 
 ## 技术栈
 
@@ -58,7 +59,8 @@ public/              web-ifc 与 libarchive 运行时 WASM/Worker
 4. 使用 libarchive.js 解压为文件树，并展平为 `Map<path, File>`。
 5. 解析 `CBM/project.cbm` 构建工程层级树。
 6. 扫描 CBM 引用或包内全部 IFC 文件，弹窗选择要加载的模型。
-7. 使用 That Open / web-ifc 加载 IFC 并建立属性、名称和设备关联索引。
+7. 如果没有 IFC，则按照 DEV → PHM → MOD 的引用关系渲染原生 GIM 几何；没有 DEV/PHM 时也会直接平铺加载包内 MOD 文件。
+8. 使用 That Open / web-ifc 加载 IFC，或使用 Three.js 原生网格加载 MOD 图元，并完成相机定位。
 
 ## 注意事项
 
