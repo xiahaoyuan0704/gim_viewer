@@ -62,6 +62,19 @@ function parseNumbers(value = ''): number[] {
 function parseMatrix(value?: string): THREE.Matrix4 {
   const nums = parseNumbers(value || '');
   if (nums.length !== 16) return new THREE.Matrix4();
+
+  // GIM 工具链里常见的矩阵写法与 Unity Matrix4x4 构造保持一致：
+  // 16 个数字按“列向量”传入，平移位于 12/13/14。也兼容部分文档/样例里的行优先 3/7/11 平移。
+  const hasColumnTranslation = Math.abs(nums[12]) + Math.abs(nums[13]) + Math.abs(nums[14]) > 1e-8;
+  const hasRowTranslation = Math.abs(nums[3]) + Math.abs(nums[7]) + Math.abs(nums[11]) > 1e-8;
+  if (hasColumnTranslation || !hasRowTranslation) {
+    return new THREE.Matrix4().set(
+      nums[0], nums[4], nums[8], nums[12],
+      nums[1], nums[5], nums[9], nums[13],
+      nums[2], nums[6], nums[10], nums[14],
+      nums[3], nums[7], nums[11], nums[15],
+    );
+  }
   return new THREE.Matrix4().set(
     nums[0], nums[1], nums[2], nums[3],
     nums[4], nums[5], nums[6], nums[7],
@@ -110,6 +123,19 @@ function createStretchedBody(el: Element): THREE.BufferGeometry {
   return new THREE.ExtrudeGeometry(shape, { depth: Number.isFinite(length) ? length : 1, bevelEnabled: false });
 }
 
+function makeZAxisCylinder(radiusTop: number, radiusBottom: number, height: number, segments = 32): THREE.BufferGeometry {
+  const geometry = new THREE.CylinderGeometry(radiusTop, radiusBottom, height, segments);
+  geometry.rotateX(Math.PI / 2);
+  geometry.translate(0, 0, height / 2);
+  return geometry;
+}
+
+function makeZAxisBox(length: number, width: number, height: number): THREE.BufferGeometry {
+  const geometry = new THREE.BoxGeometry(length, width, height);
+  geometry.translate(0, 0, height / 2);
+  return geometry;
+}
+
 function createPorcelainBushing(el: Element): THREE.BufferGeometry {
   const bottom = Number(el.getAttribute('R') || 20);
   const middle = Number(el.getAttribute('R1') || bottom * 1.25);
@@ -124,19 +150,84 @@ function createPorcelainBushing(el: Element): THREE.BufferGeometry {
     points.push(new THREE.Vector2(core, y));
     if (i < count) points.push(new THREE.Vector2(middle, y + height / count * 0.45));
   }
-  return new THREE.LatheGeometry(points, 24);
+  const geometry = new THREE.LatheGeometry(points, 24);
+  geometry.rotateX(Math.PI / 2);
+  return geometry;
+}
+
+
+function getNumericAttr(el: Element, names: string[], fallback = 0): number {
+  for (const name of names) {
+    const value = Number(el.getAttribute(name));
+    if (Number.isFinite(value) && value !== 0) return value;
+  }
+  return fallback;
+}
+
+function createFallbackGeometry(el: Element): THREE.BufferGeometry | null {
+  const radius = getNumericAttr(el, ['R', 'Radius', 'BR', 'TR', 'DR'], 0);
+  const height = getNumericAttr(el, ['H', 'L', 'Length', 'FL'], 0);
+  if (radius > 0 && height > 0) return makeZAxisCylinder(radius, radius, height);
+
+  const length = getNumericAttr(el, ['L', 'Length', 'FL', 'AL'], 0);
+  const width = getNumericAttr(el, ['W', 'Width', 'BL'], 0);
+  const thickness = getNumericAttr(el, ['T', 'H', 'Thickness'], 0);
+  if (length > 0 || width > 0 || thickness > 0) {
+    return makeZAxisBox(Math.max(length, 1), Math.max(width || thickness, 1), Math.max(thickness || width, 1));
+  }
+
+  const numericAttrs = Array.from(el.attributes).map((attr) => Number(attr.value)).filter((value) => Number.isFinite(value) && value > 0);
+  if (numericAttrs.length === 0) return null;
+  const size = Math.max(...numericAttrs, 1);
+  return makeZAxisBox(size, size, size);
 }
 
 function createGeometry(entity: Element): THREE.BufferGeometry | null {
   const cuboid = entity.querySelector('Cuboid');
-  if (cuboid) return new THREE.BoxGeometry(Number(cuboid.getAttribute('L') || 1), Number(cuboid.getAttribute('H') || 1), Number(cuboid.getAttribute('W') || 1));
+  if (cuboid) return makeZAxisBox(Number(cuboid.getAttribute('L') || 1), Number(cuboid.getAttribute('W') || 1), Number(cuboid.getAttribute('H') || 1));
   const cylinder = entity.querySelector('Cylinder');
-  if (cylinder) return new THREE.CylinderGeometry(Number(cylinder.getAttribute('R') || 1), Number(cylinder.getAttribute('R') || 1), Number(cylinder.getAttribute('H') || 1), 32);
+  if (cylinder) return makeZAxisCylinder(Number(cylinder.getAttribute('R') || 1), Number(cylinder.getAttribute('R') || 1), Number(cylinder.getAttribute('H') || 1));
+  const truncatedCone = entity.querySelector('TruncatedCone');
+  if (truncatedCone) return makeZAxisCylinder(Number(truncatedCone.getAttribute('TR') || 1), Number(truncatedCone.getAttribute('BR') || 1), Number(truncatedCone.getAttribute('H') || 1));
   const porcelain = entity.querySelector('PorcelainBushing');
   if (porcelain) return createPorcelainBushing(porcelain);
   const stretched = entity.querySelector('StretchedBody');
   if (stretched) return createStretchedBody(stretched);
-  return null;
+  const ring = entity.querySelector('Ring');
+  if (ring) return new THREE.TorusGeometry(Number(ring.getAttribute('R') || 1) + Number(ring.getAttribute('DR') || 0.2), Number(ring.getAttribute('DR') || 0.2), 16, 48, Number(ring.getAttribute('Rad') || Math.PI * 2));
+  const sphere = entity.querySelector('Sphere');
+  if (sphere) return new THREE.SphereGeometry(Number(sphere.getAttribute('R') || sphere.getAttribute('Radius') || 1), 32, 16);
+  const gasket = entity.querySelector('CircularGasket');
+  if (gasket) return new THREE.TorusGeometry(Number(gasket.getAttribute('R') || 1), Number(gasket.getAttribute('DR') || gasket.getAttribute('T') || 0.2), 12, 40);
+  const ellipsoid = entity.querySelector('RotationalEllipsoid');
+  if (ellipsoid) {
+    const geometry = new THREE.SphereGeometry(1, 32, 16);
+    geometry.scale(Number(ellipsoid.getAttribute('LR') || ellipsoid.getAttribute('R') || 1), Number(ellipsoid.getAttribute('WR') || ellipsoid.getAttribute('R') || 1), Number(ellipsoid.getAttribute('H') || ellipsoid.getAttribute('HR') || 1));
+    return geometry;
+  }
+  const tube = entity.querySelector('RoundSteelTube');
+  if (tube) return makeZAxisCylinder(Number(tube.getAttribute('R') || tube.getAttribute('BR') || 1), Number(tube.getAttribute('R') || tube.getAttribute('BR') || 1), Number(tube.getAttribute('H') || tube.getAttribute('L') || 1));
+  const flat = entity.querySelector('FlatSteel');
+  if (flat) return makeZAxisBox(Number(flat.getAttribute('L') || 1), Number(flat.getAttribute('W') || 1), Number(flat.getAttribute('T') || flat.getAttribute('H') || 1));
+  const terminal = entity.querySelector('TerminalBlock');
+  if (terminal) return makeZAxisBox(Number(terminal.getAttribute('L') || 1), Number(terminal.getAttribute('W') || 1), Number(terminal.getAttribute('T') || 1));
+  const offsetTable = entity.querySelector('OffsetRectangularTable');
+  if (offsetTable) return makeZAxisBox(Number(offsetTable.getAttribute('L') || 1), Number(offsetTable.getAttribute('W') || 1), Number(offsetTable.getAttribute('H') || offsetTable.getAttribute('T') || 1));
+  const wire = entity.querySelector('Wire');
+  if (wire) return makeZAxisCylinder(Number(wire.getAttribute('R') || wire.getAttribute('DR') || 1), Number(wire.getAttribute('R') || wire.getAttribute('DR') || 1), Number(wire.getAttribute('L') || wire.getAttribute('H') || 1), 12);
+  const angle = entity.querySelector('EquilateralAngleSteel');
+  if (angle) {
+    const length = Number(angle.getAttribute('L') || 1);
+    const width = Number(angle.getAttribute('W') || 1);
+    const thickness = Number(angle.getAttribute('T') || width * 0.1 || 1);
+    const shape = new THREE.Shape([
+      new THREE.Vector2(0, 0), new THREE.Vector2(width, 0), new THREE.Vector2(width, thickness),
+      new THREE.Vector2(thickness, thickness), new THREE.Vector2(thickness, width), new THREE.Vector2(0, width),
+    ]);
+    return new THREE.ExtrudeGeometry(shape, { depth: length, bevelEnabled: false });
+  }
+  const primitive = Array.from(entity.children).find((child) => !['TransformMatrix', 'Color'].includes(child.tagName));
+  return primitive ? createFallbackGeometry(primitive) : null;
 }
 
 async function renderMod(ctx: RenderContext, path: string, parent: THREE.Object3D, inheritedColor?: string): Promise<void> {
@@ -224,6 +315,21 @@ function listFiles(files: Map<string, File>, ext: string): string[] {
   return Array.from(files.keys()).filter((path) => path.toLowerCase().endsWith(ext));
 }
 
+async function pickRootDevFiles(files: Map<string, File>, devFiles: string[]): Promise<string[]> {
+  if (devFiles.length <= 1) return devFiles;
+  const referenced = new Set<string>();
+  for (const path of devFiles) {
+    const kv = parseKeyValue(await files.get(path)!.text());
+    const count = Number(kv['SUBDEVICES.NUM'] || 0);
+    for (let i = 0; i < count; i++) {
+      const ref = normalizeRef(kv[`SUBDEVICES${i}`] || kv[`SUBDEVICE${i}`] || '');
+      if (ref) referenced.add(ref.split('/').pop()!.toLowerCase());
+    }
+  }
+  const roots = devFiles.filter((path) => !referenced.has(path.split('/').pop()!.toLowerCase()));
+  return roots.length > 0 ? roots : devFiles;
+}
+
 export function removePreviousNativeRoot(ctx: ViewerContext): void {
   const scene = (ctx.world.scene as any).three as THREE.Scene;
   const previous = scene.getObjectByName(ROOT_NAME);
@@ -243,6 +349,7 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
   const root = new THREE.Group();
   root.name = ROOT_NAME;
   root.scale.setScalar(UNIT_SCALE);
+  root.rotation.x = -Math.PI / 2;
 
   const renderCtx: RenderContext = {
     files,
@@ -253,7 +360,8 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
     visitingPhm: new Set<string>(),
   };
 
-  const devFiles = listFiles(files, '.dev');
+  const allDevFiles = listFiles(files, '.dev');
+  const devFiles = await pickRootDevFiles(files, allDevFiles);
   const phmFiles = listFiles(files, '.phm');
   const modFiles = listFiles(files, '.mod');
 
