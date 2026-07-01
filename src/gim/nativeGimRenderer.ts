@@ -8,6 +8,7 @@ const ROOT_NAME = 'GIM_NATIVE_ROOT';
 const UNIT_SCALE = 0.001; // GIM MOD/PHM/DEV 坐标通常为 mm，Three 场景中按 m 显示。
 
 interface NativeStats {
+  cbmCount: number;
   devCount: number;
   phmCount: number;
   modCount: number;
@@ -57,6 +58,57 @@ function resolveFilePath(ctx: RenderContext, ref: string, preferredDirs: string[
 
 function parseNumbers(value = ''): number[] {
   return value.split(/[,;\s]+/).map((part) => Number(part.trim())).filter((num) => Number.isFinite(num));
+}
+
+
+function parseKeyValueLines(text: string): Array<{ key: string; value: string }> {
+  const result: Array<{ key: string; value: string }> = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const idx = raw.indexOf('=');
+    if (idx <= 0) continue;
+    result.push({ key: raw.slice(0, idx).trim(), value: raw.slice(idx + 1).trim() });
+  }
+  return result;
+}
+
+interface OrderedRef {
+  ref: string;
+  matrix?: string;
+  color?: string;
+}
+
+function parseOrderedRefs(text: string, sectionKey: string, refPattern: RegExp, tupleSize: 2 | 3): OrderedRef[] {
+  const lines = parseKeyValueLines(text);
+  const start = lines.findIndex((line) => line.key.toUpperCase() === sectionKey.toUpperCase());
+  if (start < 0) return [];
+  const count = Number(lines[start].value || 0);
+  if (!Number.isFinite(count) || count <= 0) return [];
+  const refs: OrderedRef[] = [];
+  let cursor = start + 1;
+  for (let i = 0; i < count && cursor < lines.length; i++) {
+    const refLine = lines[cursor++];
+    if (!refLine || !refPattern.test(refLine.key)) break;
+    const item: OrderedRef = { ref: refLine.value };
+    for (let step = 1; step < tupleSize && cursor < lines.length; step++) {
+      const line = lines[cursor++];
+      if (/^TRANSFORMMATRIX/i.test(line.key)) item.matrix = line.value;
+      else if (/^COLOR/i.test(line.key)) item.color = line.value;
+    }
+    refs.push(item);
+  }
+  return refs;
+}
+
+function parseIndexedRefs(kv: Record<string, string>, sectionKey: string, refKey: string, includeColor = false): OrderedRef[] {
+  const count = Number(kv[sectionKey] || 0);
+  if (!Number.isFinite(count) || count <= 0) return [];
+  const refs: OrderedRef[] = [];
+  for (let i = 0; i < count; i++) {
+    const ref = kv[`${refKey}${i}`] || kv[`${refKey}S${i}`];
+    if (!ref) continue;
+    refs.push({ ref, matrix: kv[`TRANSFORMMATRIX${i}`], color: includeColor ? kv[`COLOR${i}`] : undefined });
+  }
+  return refs;
 }
 
 function parseMatrix(value?: string): THREE.Matrix4 {
@@ -255,60 +307,109 @@ async function renderPhm(ctx: RenderContext, path: string, parent: THREE.Object3
   ctx.visitingPhm.add(path);
   const file = ctx.files.get(path);
   if (!file) return;
-  const kv = parseKeyValue(await file.text());
-  const count = Number(kv['SOLIDMODELS.NUM'] || 0);
+  const text = await file.text();
+  const kv = parseKeyValue(text);
   const group = new THREE.Group();
   group.name = path;
   parent.add(group);
   ctx.stats.phmCount += 1;
-  for (let i = 0; i < count; i++) {
-    const ref = kv[`SOLIDMODEL${i}`];
-    if (!ref) continue;
+  const refs = parseOrderedRefs(text, 'SOLIDMODELS.NUM', /^SOLIDMODEL/i, 3);
+  const modelRefs = refs.length > 0 ? refs : parseIndexedRefs(kv, 'SOLIDMODELS.NUM', 'SOLIDMODEL', true);
+  for (const item of modelRefs) {
+    const ref = item.ref;
     const childPath = resolveFilePath(ctx, ref, ['MOD', 'PHM']);
     if (!childPath) continue;
     const child = new THREE.Group();
     child.name = ref;
-    child.applyMatrix4(parseMatrix(kv[`TRANSFORMMATRIX${i}`]));
+    child.applyMatrix4(parseMatrix(item.matrix));
     group.add(child);
-    if (/\.mod$/i.test(childPath)) await renderMod(ctx, childPath, child, kv[`COLOR${i}`]);
+    if (/\.mod$/i.test(childPath)) await renderMod(ctx, childPath, child, item.color);
     else if (/\.phm$/i.test(childPath)) await renderPhm(ctx, childPath, child);
   }
   ctx.visitingPhm.delete(path);
 }
 
-async function renderDev(ctx: RenderContext, path: string, parent: THREE.Object3D): Promise<void> {
+async function renderDev(ctx: RenderContext, path: string, parent: THREE.Object3D, matrix?: THREE.Matrix4): Promise<void> {
   if (ctx.visitingDev.has(path)) return;
   ctx.visitingDev.add(path);
   const file = ctx.files.get(path);
   if (!file) return;
-  const kv = parseKeyValue(await file.text());
+  const text = await file.text();
+  const kv = parseKeyValue(text);
   const group = new THREE.Group();
   group.name = kv.SYMBOLNAME || path;
+  if (matrix) group.applyMatrix4(matrix);
   parent.add(group);
   ctx.stats.devCount += 1;
 
-  const solidCount = Number(kv['SOLIDMODELS.NUM'] || 0);
-  for (let i = 0; i < solidCount; i++) {
-    const ref = kv[`SOLIDMODEL${i}`];
-    if (!ref) continue;
+  const orderedSolidRefs = parseOrderedRefs(text, 'SOLIDMODELS.NUM', /^SOLIDMODEL/i, 2);
+  const solidRefs = orderedSolidRefs.length > 0 ? orderedSolidRefs : parseIndexedRefs(kv, 'SOLIDMODELS.NUM', 'SOLIDMODEL');
+  for (const item of solidRefs) {
+    const ref = item.ref;
     const phmPath = resolveFilePath(ctx, ref, ['PHM', 'MOD']);
     if (!phmPath) continue;
     const child = new THREE.Group();
     child.name = ref;
-    child.applyMatrix4(parseMatrix(kv[`TRANSFORMMATRIX${i}`]));
+    child.applyMatrix4(parseMatrix(item.matrix));
     group.add(child);
     if (/\.phm$/i.test(phmPath)) await renderPhm(ctx, phmPath, child);
     else if (/\.mod$/i.test(phmPath)) await renderMod(ctx, phmPath, child);
   }
 
-  const subCount = Number(kv['SUBDEVICES.NUM'] || 0);
-  for (let i = 0; i < subCount; i++) {
-    const ref = kv[`SUBDEVICES${i}`] || kv[`SUBDEVICE${i}`];
-    if (!ref) continue;
+  const orderedSubRefs = parseOrderedRefs(text, 'SUBDEVICES.NUM', /^SUBDEVICES?/i, 2);
+  const subRefs = orderedSubRefs.length > 0 ? orderedSubRefs : parseIndexedRefs(kv, 'SUBDEVICES.NUM', 'SUBDEVICE');
+  for (const item of subRefs) {
+    const ref = item.ref;
     const devPath = resolveFilePath(ctx, ref, ['DEV']);
-    if (devPath) await renderDev(ctx, devPath, group);
+    if (devPath) await renderDev(ctx, devPath, group, parseMatrix(item.matrix));
   }
   ctx.visitingDev.delete(path);
+}
+
+
+async function renderCbm(ctx: RenderContext, path: string, parent: THREE.Object3D, visited = new Set<string>()): Promise<void> {
+  if (visited.has(path)) return;
+  visited.add(path);
+  const file = ctx.files.get(path);
+  if (!file) return;
+  const kv = parseKeyValue(await file.text());
+  const group = new THREE.Group();
+  group.name = kv.PARTNAME || kv.SYSCLASSIFYNAME || kv.ENTITYNAME || path;
+  group.applyMatrix4(parseMatrix(kv.TRANSFORMMATRIX));
+  parent.add(group);
+  ctx.stats.cbmCount += 1;
+
+  const devRef = kv.OBJECTMODELPOINTER;
+  const devPath = devRef ? resolveFilePath(ctx, devRef, ['DEV']) : null;
+  if (devPath) await renderDev(ctx, devPath, group);
+
+  const singleSubsystem = kv.SUBSYSTEM ? resolveFilePath(ctx, kv.SUBSYSTEM, ['CBM']) : null;
+  if (singleSubsystem) await renderCbm(ctx, singleSubsystem, group, visited);
+
+  const subsystemCount = Number(kv['SUBSYSTEMS.NUM'] || 0);
+  for (let i = 0; i < subsystemCount; i++) {
+    const ref = kv[`SUBSYSTEM${i}`];
+    const childPath = ref ? resolveFilePath(ctx, ref, ['CBM']) : null;
+    if (childPath) await renderCbm(ctx, childPath, group, visited);
+  }
+
+  const subdeviceCount = Number(kv['SUBDEVICES.NUM'] || 0);
+  for (let i = 0; i < subdeviceCount; i++) {
+    const ref = kv[`SUBDEVICE${i}`] || kv[`SUBDEVICES${i}`];
+    const childPath = ref ? resolveFilePath(ctx, ref, ['CBM']) : null;
+    if (childPath) await renderCbm(ctx, childPath, group, visited);
+  }
+}
+
+async function renderFromCbmIfPossible(ctx: RenderContext, parent: THREE.Object3D): Promise<boolean> {
+  const before = ctx.stats.meshCount;
+  const project = resolveFilePath(ctx, 'project.cbm', ['CBM']);
+  if (project) await renderCbm(ctx, project, parent);
+  else {
+    const cbmFiles = listFiles(ctx.files, '.cbm');
+    if (cbmFiles.length === 1) await renderCbm(ctx, cbmFiles[0], parent);
+  }
+  return ctx.stats.meshCount > before;
 }
 
 function listFiles(files: Map<string, File>, ext: string): string[] {
@@ -355,7 +456,7 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
     files,
     byLowerPath: buildPathIndex(files),
     root,
-    stats: { devCount: 0, phmCount: 0, modCount: 0, meshCount: 0 },
+    stats: { cbmCount: 0, devCount: 0, phmCount: 0, modCount: 0, meshCount: 0 },
     visitingDev: new Set<string>(),
     visitingPhm: new Set<string>(),
   };
@@ -365,7 +466,11 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
   const phmFiles = listFiles(files, '.phm');
   const modFiles = listFiles(files, '.mod');
 
-  if (devFiles.length > 0) {
+  const renderedFromCbm = await renderFromCbmIfPossible(renderCtx, root);
+
+  if (renderedFromCbm) {
+    // CBM carries project hierarchy and placement, so prefer it whenever it yields geometry.
+  } else if (devFiles.length > 0) {
     for (const path of devFiles) await renderDev(renderCtx, path, root);
   } else if (phmFiles.length > 0) {
     for (const path of phmFiles) await renderPhm(renderCtx, path, root);
