@@ -11,7 +11,7 @@
 - 使用 That Open + web-ifc 加载 IFC 几何，支持模型列表、点击拾取、高亮、相机定位和属性查看。
 - 当 GIM 包没有 IFC 时，优先沿 CBM 工程层级应用设备位姿；没有有效 CBM 时，再从 DEV/PHM/MOD 关系或裸 MOD 文件渲染已有原生几何图元。
 - 在属性抽屉中展示 FAM 设计参数、DEV 设备信息、IFC 原生属性集等内容。
-- Electron 桌面端支持原生文件选择窗口打开 `.gim` 文件。
+- Electron 桌面端支持原生文件选择窗口、菜单“打开 GIM 模型...”和 Ctrl/Cmd+O 快捷键打开 `.gim` 文件。
 
 > 说明：当前优先加载 GIM 包中引用的 IFC 文件；如果未发现 IFC，则会回退解析 `DEV/`、`PHM/`、`MOD/` 中的原生几何。已支持 MOD 中的长方体、圆柱体、瓷套管和拉伸体等基础图元，复杂专有图元/STL 可继续扩展。
 
@@ -66,4 +66,4 @@ public/              web-ifc 与 libarchive 运行时 WASM/Worker
 
 - `public/worker-bundle.js`、`public/libarchive.wasm`、`public/web-ifc.wasm` 和 `public/web-ifc-mt.wasm` 是离线运行必需文件。
 - 大型演示数据建议放在 `demo/`，并保持在 `.gitignore` 中排除。
-- Electron 打包时会将 Vite `dist/` 与 `electron/` 目录一并纳入应用。
+- Electron 打包时会将 Vite `dist/` 与 `electron/` 目录一并纳入应用；桌面端可通过左侧按钮、文件菜单或 Ctrl/Cmd+O 打开 GIM。

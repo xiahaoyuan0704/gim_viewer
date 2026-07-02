@@ -6,6 +6,7 @@ export interface DesktopGimFile {
 
 export interface GimDesktopApi {
   openGimFile(): Promise<DesktopGimFile | null>;
+  onOpenGimFileRequested(callback: () => void): () => void;
   platform: string;
 }
 

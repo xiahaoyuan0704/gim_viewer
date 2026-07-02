@@ -81,12 +81,7 @@ export async function loadSelectedIfcFiles(ctx: ViewerContext, state: AppState, 
 
 /** 绑定 GIM 文件打开事件 */
 export function setupOpenGimService(ctx: ViewerContext, state: AppState, showMessage: (text: string) => void): void {
-  btnLoadGim.addEventListener('click', async () => {
-    if (!isDesktopRuntime()) {
-      gimFileInput.click();
-      return;
-    }
-
+  async function openGimFromDesktopDialog(): Promise<void> {
     btnLoadGim.disabled = true;
     try {
       const selectedFile = await window.gimDesktop?.openGimFile();
@@ -112,7 +107,16 @@ export function setupOpenGimService(ctx: ViewerContext, state: AppState, showMes
       showLoading(`GIM 解析失败: ${err instanceof Error ? err.message : String(err)}`);
       setTimeout(hideLoading, 3000);
     } finally { btnLoadGim.disabled = false; }
+  }
+
+  btnLoadGim.addEventListener('click', async () => {
+    if (!isDesktopRuntime()) {
+      gimFileInput.click();
+      return;
+    }
+    await openGimFromDesktopDialog();
   });
+  window.gimDesktop?.onOpenGimFileRequested(() => { void openGimFromDesktopDialog(); });
   gimFileInput.addEventListener('change', async () => {
     const files = Array.from(gimFileInput.files || []);
     if (files.length === 0) return;
