@@ -8,9 +8,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "desktop:dev": "npm run electron:dev",
-    "electron:dev": "node scripts/run-electron.cjs dev",
-    "desktop:pack": "node scripts/run-electron.cjs pack",
-    "desktop:dist": "node scripts/run-electron.cjs dist"
+    "electron:dev": "npm run build && node scripts/run-electron.cjs dev",
+    "desktop:pack": "npm run build && node scripts/run-electron.cjs pack",
+    "desktop:dist": "npm run build && node scripts/run-electron.cjs dist"
   },
   "author": "bamboosjtu",
   "license": "MIT",
