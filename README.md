@@ -33,7 +33,7 @@ npm run desktop:pack # 通过 npx electron-builder 生成未打包目录
 npm run desktop:dist # 通过 npx electron-builder 生成平台安装包
 ```
 
-普通 Web 开发只需要 `npm install && npm run dev`。Electron 不再放在默认 devDependencies 中，避免受限网络下安装 Electron 失败影响 Vite/esbuild；只有运行桌面端命令时才会通过 `npx` 按需下载 `electron` 或 `electron-builder`。如果网络受限，请先配置可访问的 npm 镜像源，或在本机全局/本地安装 Electron 后再运行桌面端命令。
+普通 Web 开发只需要 `npm install && npm run dev`。Electron 不放在默认 devDependencies 中，避免 Electron 二进制下载失败影响 Vite/esbuild；桌面端命令会通过跨平台脚本按固定版本下载 `electron@31.7.7` 或 `electron-builder@24.13.3`，并临时使用 Electron/Builder 镜像环境变量。若曾经中断下载导致 `node_modules/electron` 损坏，请先删除 `node_modules/electron` 后重试；也可自行设置 `ELECTRON_MIRROR` 覆盖默认镜像。
 
 ## 项目结构
 
