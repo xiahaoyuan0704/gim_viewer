@@ -170,15 +170,52 @@ function makeMaterial(color: THREE.Color, opacity = 1): THREE.MeshStandardMateri
 }
 
 function createStretchedBody(el: Element): THREE.BufferGeometry {
-  const points = (el.getAttribute('Array') || '')
+  const rawPoints = (el.getAttribute('Array') || '')
     .split(';')
     .map((pair) => parseNumbers(pair))
-    .filter((nums) => nums.length >= 2)
-    .map(([x, y]) => new THREE.Vector2(x, y));
-  if (points.length < 3) return new THREE.BoxGeometry(1, 1, 1);
+    .filter((nums) => nums.length >= 2);
+  if (rawPoints.length < 3) return new THREE.BoxGeometry(1, 1, 1);
+
   const length = Number(el.getAttribute('L') || 1);
+  const safeLength = Number.isFinite(length) ? length : 1;
+  const normalParts = parseNumbers(el.getAttribute('Normal') || '');
+
+  // 实际 GIM 拉伸体的 Array 往往是三维截面点，Normal 指定拉伸方向。
+  // 不能把它一律当 XY 平面沿 Z 轴挤出，否则薄板/筋板会竖起来并出现明显偏移。
+  if (rawPoints.every((nums) => nums.length >= 3) && normalParts.length >= 3) {
+    const base = rawPoints.map(([x, y, z]) => new THREE.Vector3(x, y, z));
+    const normal = new THREE.Vector3(normalParts[0], normalParts[1], normalParts[2]);
+    if (normal.lengthSq() > 0) {
+      normal.normalize().multiplyScalar(safeLength);
+      return createPrismFrom3DPolygon(base, normal);
+    }
+  }
+
+  const points = rawPoints.map(([x, y]) => new THREE.Vector2(x, y));
   const shape = new THREE.Shape(points);
-  return new THREE.ExtrudeGeometry(shape, { depth: Number.isFinite(length) ? length : 1, bevelEnabled: false });
+  return new THREE.ExtrudeGeometry(shape, { depth: safeLength, bevelEnabled: false });
+}
+
+function createPrismFrom3DPolygon(base: THREE.Vector3[], offset: THREE.Vector3): THREE.BufferGeometry {
+  const top = base.map((point) => point.clone().add(offset));
+  const positions: number[] = [];
+  for (const point of base) positions.push(point.x, point.y, point.z);
+  for (const point of top) positions.push(point.x, point.y, point.z);
+
+  const indices: number[] = [];
+  for (let i = 1; i < base.length - 1; i++) indices.push(0, i, i + 1);
+  const topOffset = base.length;
+  for (let i = 1; i < top.length - 1; i++) indices.push(topOffset, topOffset + i + 1, topOffset + i);
+  for (let i = 0; i < base.length; i++) {
+    const next = (i + 1) % base.length;
+    indices.push(i, next, topOffset + next, i, topOffset + next, topOffset + i);
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
 function makeZAxisCylinder(radiusTop: number, radiusBottom: number, height: number, segments = 32): THREE.BufferGeometry {
