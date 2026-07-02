@@ -115,24 +115,30 @@ function parseMatrix(value?: string): THREE.Matrix4 {
   const nums = parseNumbers(value || '');
   if (nums.length !== 16) return new THREE.Matrix4();
 
-  // GIM 工具链里常见的矩阵写法与 Unity Matrix4x4 构造保持一致：
-  // 16 个数字按“列向量”传入，平移位于 12/13/14。也兼容部分文档/样例里的行优先 3/7/11 平移。
-  const hasColumnTranslation = Math.abs(nums[12]) + Math.abs(nums[13]) + Math.abs(nums[14]) > 1e-8;
-  const hasRowTranslation = Math.abs(nums[3]) + Math.abs(nums[7]) + Math.abs(nums[11]) > 1e-8;
-  if (hasColumnTranslation || !hasRowTranslation) {
-    return new THREE.Matrix4().set(
-      nums[0], nums[4], nums[8], nums[12],
-      nums[1], nums[5], nums[9], nums[13],
-      nums[2], nums[6], nums[10], nums[14],
-      nums[3], nums[7], nums[11], nums[15],
-    );
-  }
-  return new THREE.Matrix4().set(
+  const columnMajor = new THREE.Matrix4().set(
+    nums[0], nums[4], nums[8], nums[12],
+    nums[1], nums[5], nums[9], nums[13],
+    nums[2], nums[6], nums[10], nums[14],
+    nums[3], nums[7], nums[11], nums[15],
+  );
+  const rowMajor = new THREE.Matrix4().set(
     nums[0], nums[1], nums[2], nums[3],
     nums[4], nums[5], nums[6], nums[7],
     nums[8], nums[9], nums[10], nums[11],
     nums[12], nums[13], nums[14], nums[15],
   );
+
+  // 同时兼容两类 GIM 导出：Unity/列向量矩阵的仿射最后一行在 3/7/11/15，
+  // 行优先矩阵的仿射最后一行在 12/13/14/15。用仿射行误差优先判断，
+  // 只有二者都像合法矩阵时再根据平移列/行是否非零决定，避免无平移旋转矩阵被误判导致个别部件漂移。
+  const columnAffineError = Math.abs(nums[3]) + Math.abs(nums[7]) + Math.abs(nums[11]) + Math.abs(nums[15] - 1);
+  const rowAffineError = Math.abs(nums[12]) + Math.abs(nums[13]) + Math.abs(nums[14]) + Math.abs(nums[15] - 1);
+  if (columnAffineError + 1e-8 < rowAffineError) return columnMajor;
+  if (rowAffineError + 1e-8 < columnAffineError) return rowMajor;
+
+  const columnTranslation = Math.abs(nums[12]) + Math.abs(nums[13]) + Math.abs(nums[14]);
+  const rowTranslation = Math.abs(nums[3]) + Math.abs(nums[7]) + Math.abs(nums[11]);
+  return columnTranslation >= rowTranslation ? columnMajor : rowMajor;
 }
 
 function parseColor(el: Element | null, override?: string): THREE.Color {
@@ -339,7 +345,11 @@ function createGeometry(entity: Element): THREE.BufferGeometry | null {
   const stretched = entity.querySelector('StretchedBody');
   if (stretched) return createStretchedBody(stretched);
   const ring = entity.querySelector('Ring');
-  if (ring) return new THREE.TorusGeometry(Number(ring.getAttribute('R') || 1) + Number(ring.getAttribute('DR') || 0.2), Number(ring.getAttribute('DR') || 0.2), 16, 48, Number(ring.getAttribute('Rad') || Math.PI * 2));
+  if (ring) {
+    const geometry = new THREE.TorusGeometry(Number(ring.getAttribute('R') || 1) + Number(ring.getAttribute('DR') || 0.2), Number(ring.getAttribute('DR') || 0.2), 16, 48, Number(ring.getAttribute('Rad') || Math.PI * 2));
+    geometry.rotateX(Math.PI / 2);
+    return geometry;
+  }
   const sphere = entity.querySelector('Sphere');
   if (sphere) return new THREE.SphereGeometry(Number(sphere.getAttribute('R') || sphere.getAttribute('Radius') || 1), 32, 16);
   const gasket = entity.querySelector('CircularGasket');
