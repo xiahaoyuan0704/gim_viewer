@@ -18,6 +18,17 @@ import { alignNativeRootToLoadedIfc, renderNativeGimModel } from '../gim/nativeG
 function showLoading(text: string) { loadingEl.textContent = text; loadingEl.style.display = 'block'; }
 function hideLoading() { loadingEl.style.display = 'none'; }
 
+
+function getNativeOverlayCbmFiles(state: AppState, selected: IfcEntry[]): Set<string> | undefined {
+  const selectedModelIds = new Set(selected.map((entry) => entry.modelId));
+  const cbmFiles = new Set<string>();
+  for (const relation of state.fileDevRelations) {
+    if (!selectedModelIds.has(relation.modelId)) continue;
+    for (const cbm of relation.deviceCbms) cbmFiles.add(cbm);
+  }
+  return cbmFiles.size > 0 ? cbmFiles : undefined;
+}
+
 /** GIM 文件解压后的处理流程 */
 export async function onGimExtracted(ctx: ViewerContext, state: AppState, files: Map<string, File>, showMessage: (text: string) => void): Promise<IfcEntry[]> {
   state.currentFiles = files;
@@ -69,7 +80,7 @@ export async function loadSelectedIfcFiles(ctx: ViewerContext, state: AppState, 
     if (state.currentFiles) {
       try {
         showLoading('正在叠加 GIM 原生设备细节...');
-        const nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles);
+        const nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles, { cbmFiles: getNativeOverlayCbmFiles(state, selected) });
         if (nativeResult && alignNativeRootToLoadedIfc(ctx, state, nativeResult.group)) state.hasFittedCamera = false;
       } catch (nativeErr) {
         console.warn('GIM 原生细节渲染失败，继续显示 IFC:', nativeErr);

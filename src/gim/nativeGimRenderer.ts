@@ -28,6 +28,10 @@ export interface NativeGimRenderResult extends NativeStats {
   group: THREE.Group;
 }
 
+export interface NativeGimRenderOptions {
+  cbmFiles?: Set<string>;
+}
+
 function buildPathIndex(files: Map<string, File>): Map<string, string> {
   const index = new Map<string, string>();
   for (const path of files.keys()) index.set(path.toLowerCase(), path);
@@ -616,8 +620,16 @@ async function renderCbm(ctx: RenderContext, path: string, parent: THREE.Object3
   }
 }
 
-async function renderFromCbmIfPossible(ctx: RenderContext, parent: THREE.Object3D): Promise<boolean> {
+async function renderFromCbmIfPossible(ctx: RenderContext, parent: THREE.Object3D, options: NativeGimRenderOptions = {}): Promise<boolean> {
   const before = ctx.stats.meshCount;
+  if (options.cbmFiles && options.cbmFiles.size > 0) {
+    for (const ref of options.cbmFiles) {
+      const cbmPath = resolveFilePath(ctx, ref, ['CBM']);
+      if (cbmPath) await renderCbm(ctx, cbmPath, parent, new Set<string>());
+    }
+    return ctx.stats.meshCount > before;
+  }
+
   const project = resolveFilePath(ctx, 'project.cbm', ['CBM']);
   if (project) await renderCbm(ctx, project, parent);
   else {
@@ -729,7 +741,7 @@ export function removePreviousNativeRoot(ctx: ViewerContext): void {
   });
 }
 
-export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, files: Map<string, File>): Promise<NativeGimRenderResult | null> {
+export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, files: Map<string, File>, options: NativeGimRenderOptions = {}): Promise<NativeGimRenderResult | null> {
   removePreviousNativeRoot(ctx);
   const root = new THREE.Group();
   root.name = ROOT_NAME;
@@ -750,15 +762,15 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
   const phmFiles = listFiles(files, '.phm');
   const modFiles = listFiles(files, '.mod');
 
-  const renderedFromCbm = await renderFromCbmIfPossible(renderCtx, root);
+  const renderedFromCbm = await renderFromCbmIfPossible(renderCtx, root, options);
 
   if (renderedFromCbm) {
     // CBM carries project hierarchy and placement, so prefer it whenever it yields geometry.
-  } else if (devFiles.length > 0) {
+  } else if (!options.cbmFiles && devFiles.length > 0) {
     for (const path of devFiles) await renderDev(renderCtx, path, root);
-  } else if (phmFiles.length > 0) {
+  } else if (!options.cbmFiles && phmFiles.length > 0) {
     for (const path of phmFiles) await renderPhm(renderCtx, path, root);
-  } else {
+  } else if (!options.cbmFiles) {
     let offset = 0;
     for (const path of modFiles) {
       const group = new THREE.Group();
