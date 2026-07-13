@@ -646,6 +646,75 @@ async function pickRootDevFiles(files: Map<string, File>, devFiles: string[]): P
   return roots.length > 0 ? roots : devFiles;
 }
 
+
+function getMaterialKey(material: THREE.Material): string {
+  const mat = material as THREE.MeshStandardMaterial;
+  const color = mat.color ? mat.color.getHexString() : 'none';
+  return [material.type, color, mat.opacity ?? 1, mat.transparent ? 1 : 0, mat.side].join('|');
+}
+
+function optimizeNativeRoot(root: THREE.Group): void {
+  root.updateMatrixWorld(true);
+  const inverseRoot = root.matrixWorld.clone().invert();
+  const buckets = new Map<string, { material: THREE.Material; geometries: THREE.BufferGeometry[] }>();
+  const originals: THREE.Mesh[] = [];
+
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh) || !(obj.geometry instanceof THREE.BufferGeometry)) return;
+    originals.push(obj);
+    const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+    const material = materials[0];
+    const key = getMaterialKey(material);
+    if (!buckets.has(key)) buckets.set(key, { material, geometries: [] });
+    const geometry = obj.geometry.clone();
+    geometry.applyMatrix4(inverseRoot.clone().multiply(obj.matrixWorld));
+    buckets.get(key)!.geometries.push(geometry);
+  });
+
+  if (originals.length < 2) return;
+  root.clear();
+  for (const mesh of originals) mesh.geometry.dispose();
+  for (const { material, geometries } of buckets.values()) {
+    const merged = mergeBufferGeometries(geometries);
+    for (const geometry of geometries) geometry.dispose();
+    if (!merged) continue;
+    const mesh = new THREE.Mesh(merged, material);
+    mesh.name = 'GIM_NATIVE_MERGED';
+    root.add(mesh);
+  }
+}
+
+function getLoadedIfcBox(ctx: ViewerContext, state: AppState): THREE.Box3 | null {
+  const box = new THREE.Box3();
+  let hasBox = false;
+  for (const [modelId] of state.loadedModels) {
+    const model = ctx.fragments.list.get(modelId);
+    if (!model?.object) continue;
+    const modelBox = new THREE.Box3().setFromObject(model.object);
+    if (modelBox.isEmpty()) continue;
+    box.union(modelBox);
+    hasBox = true;
+  }
+  return hasBox ? box : null;
+}
+
+export function alignNativeRootToLoadedIfc(ctx: ViewerContext, state: AppState, root: THREE.Group): boolean {
+  const ifcBox = getLoadedIfcBox(ctx, state);
+  if (!ifcBox) return false;
+  root.updateMatrixWorld(true);
+  const nativeBox = new THREE.Box3().setFromObject(root);
+  if (nativeBox.isEmpty()) return false;
+
+  const ifcCenter = ifcBox.getCenter(new THREE.Vector3());
+  const nativeCenter = nativeBox.getCenter(new THREE.Vector3());
+  const delta = ifcCenter.sub(nativeCenter);
+  // 水平中心对齐，Z 方向按底部贴齐，避免把设备细节整体抬高/压低。
+  delta.z = ifcBox.min.z - nativeBox.min.z;
+  root.position.add(delta);
+  root.updateMatrixWorld(true);
+  return true;
+}
+
 export function removePreviousNativeRoot(ctx: ViewerContext): void {
   const scene = (ctx.world.scene as any).three as THREE.Scene;
   const previous = scene.getObjectByName(ROOT_NAME);
@@ -701,6 +770,7 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
   }
 
   if (renderCtx.stats.meshCount === 0) return null;
+  optimizeNativeRoot(root);
   ((ctx.world.scene as any).three as THREE.Scene).add(root);
   state.hasFittedCamera = false;
   fitCameraToScene(ctx, state);
