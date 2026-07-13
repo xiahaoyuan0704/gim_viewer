@@ -696,15 +696,43 @@ function optimizeNativeRoot(root: THREE.Group): void {
   }
 }
 
+function isLikelySitePlane(box: THREE.Box3): boolean {
+  const size = box.getSize(new THREE.Vector3());
+  const horizontal = Math.max(size.x, size.y);
+  const vertical = Math.max(size.z, 1e-6);
+  return horizontal > 20 && horizontal / vertical > 80;
+}
+
+function getObjectStructuralBox(object: THREE.Object3D): THREE.Box3 | null {
+  const structuralBox = new THREE.Box3();
+  const fallbackBox = new THREE.Box3();
+  let hasStructural = false;
+  let hasFallback = false;
+
+  object.updateMatrixWorld(true);
+  object.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+    const childBox = new THREE.Box3().setFromObject(child);
+    if (childBox.isEmpty()) return;
+    fallbackBox.union(childBox);
+    hasFallback = true;
+    if (isLikelySitePlane(childBox)) return;
+    structuralBox.union(childBox);
+    hasStructural = true;
+  });
+
+  if (hasStructural) return structuralBox;
+  return hasFallback ? fallbackBox : null;
+}
+
 function getLoadedIfcBox(ctx: ViewerContext, state: AppState): THREE.Box3 | null {
   const box = new THREE.Box3();
   let hasBox = false;
   for (const [modelId] of state.loadedModels) {
     const model = ctx.fragments.list.get(modelId);
     if (!model?.object) continue;
-    model.object.updateMatrixWorld(true);
-    const modelBox = new THREE.Box3().setFromObject(model.object);
-    if (modelBox.isEmpty()) continue;
+    const modelBox = getObjectStructuralBox(model.object);
+    if (!modelBox) continue;
     box.union(modelBox);
     hasBox = true;
   }
