@@ -702,6 +702,7 @@ function getLoadedIfcBox(ctx: ViewerContext, state: AppState): THREE.Box3 | null
   for (const [modelId] of state.loadedModels) {
     const model = ctx.fragments.list.get(modelId);
     if (!model?.object) continue;
+    model.object.updateMatrixWorld(true);
     const modelBox = new THREE.Box3().setFromObject(model.object);
     if (modelBox.isEmpty()) continue;
     box.union(modelBox);
