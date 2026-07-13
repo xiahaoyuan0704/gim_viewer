@@ -66,6 +66,14 @@ export async function loadSelectedIfcFiles(ctx: ViewerContext, state: AppState, 
       await loadIfcBuffer(ctx, entry.name, buffer, state, (p) => showLoading(`${entry.name}: ${Math.round(p * 100)}%`));
     }
     await buildIfcNameIndex(ctx, state);
+    if (state.currentFiles) {
+      try {
+        showLoading('正在叠加 GIM 原生设备细节...');
+        await renderNativeGimModel(ctx, state, state.currentFiles);
+      } catch (nativeErr) {
+        console.warn('GIM 原生细节渲染失败，继续显示 IFC:', nativeErr);
+      }
+    }
     buildAndRenderCbmTree(ctx, state, (text) => showLoading(text));
     renderFileDevPanel(ctx, state, (text) => showLoading(text));
     emptyTipEl.style.display = 'none';
