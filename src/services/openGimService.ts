@@ -12,9 +12,27 @@ import { openIfcModal, getModalSelectedEntries, closeIfcModal } from '../ui/ifcS
 import { buildAndRenderCbmTree } from '../ui/cbmTreeView.js';
 import { renderFileDevPanel } from '../ui/fileDevView.js';
 import { loadingEl, emptyTipEl, gimFileInput, btnLoadGim } from '../ui/dom.js';
+import { isDesktopRuntime, toArrayBuffer } from '../desktop/electron.js';
+import { alignNativeRootToLoadedIfc, renderNativeGimModel } from '../gim/nativeGimRenderer.js';
 
 function showLoading(text: string) { loadingEl.textContent = text; loadingEl.style.display = 'block'; }
 function hideLoading() { loadingEl.style.display = 'none'; }
+
+
+function waitForViewerFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+
+function getNativeOverlayCbmFiles(state: AppState, selected: IfcEntry[]): Set<string> | undefined {
+  const selectedModelIds = new Set(selected.map((entry) => entry.modelId));
+  const cbmFiles = new Set<string>();
+  for (const relation of state.fileDevRelations) {
+    if (!selectedModelIds.has(relation.modelId)) continue;
+    for (const cbm of relation.deviceCbms) cbmFiles.add(cbm);
+  }
+  return cbmFiles.size > 0 ? cbmFiles : undefined;
+}
 
 /** GIM 文件解压后的处理流程 */
 export async function onGimExtracted(ctx: ViewerContext, state: AppState, files: Map<string, File>, showMessage: (text: string) => void): Promise<IfcEntry[]> {
@@ -64,6 +82,22 @@ export async function loadSelectedIfcFiles(ctx: ViewerContext, state: AppState, 
       await loadIfcBuffer(ctx, entry.name, buffer, state, (p) => showLoading(`${entry.name}: ${Math.round(p * 100)}%`));
     }
     await buildIfcNameIndex(ctx, state);
+    if (state.currentFiles) {
+      try {
+        showLoading('正在叠加 GIM 原生设备细节...');
+        ctx.fragments.core.update(true);
+        await waitForViewerFrame();
+        const overlayCbmFiles = getNativeOverlayCbmFiles(state, selected);
+        const nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles, { cbmFiles: overlayCbmFiles });
+        if (nativeResult) {
+          ctx.fragments.core.update(true);
+          await waitForViewerFrame();
+          if (await alignNativeRootToLoadedIfc(ctx, state, nativeResult.group, overlayCbmFiles)) state.hasFittedCamera = false;
+        }
+      } catch (nativeErr) {
+        console.warn('GIM 原生细节渲染失败，继续显示 IFC:', nativeErr);
+      }
+    }
     buildAndRenderCbmTree(ctx, state, (text) => showLoading(text));
     renderFileDevPanel(ctx, state, (text) => showLoading(text));
     emptyTipEl.style.display = 'none';
@@ -79,7 +113,42 @@ export async function loadSelectedIfcFiles(ctx: ViewerContext, state: AppState, 
 
 /** 绑定 GIM 文件打开事件 */
 export function setupOpenGimService(ctx: ViewerContext, state: AppState, showMessage: (text: string) => void): void {
-  btnLoadGim.addEventListener('click', () => gimFileInput.click());
+  async function openGimFromDesktopDialog(): Promise<void> {
+    btnLoadGim.disabled = true;
+    try {
+      const selectedFile = await window.gimDesktop?.openGimFile();
+      if (!selectedFile) return;
+      showLoading(`正在解压 GIM 文件: ${selectedFile.name}...`);
+      const { extractGimFile } = await import('../gim/gimExtractor.js');
+      const extracted = await extractGimFile(toArrayBuffer(selectedFile.data));
+      const entries = await onGimExtracted(ctx, state, extracted, showMessage);
+      if (entries.length === 0) {
+        const nativeResult = await renderNativeGimModel(ctx, state, extracted);
+        if (nativeResult) {
+          emptyTipEl.style.display = 'none';
+          showLoading(`已加载 GIM 原生几何: ${nativeResult.meshCount} 个图元`);
+          setTimeout(hideLoading, 1800);
+          return;
+        }
+        showLoading('未在 GIM 文件中找到可渲染的 IFC/MOD/PHM/DEV 内容'); setTimeout(hideLoading, 3000); return;
+      }
+      hideLoading();
+      openIfcModal(entries);
+    } catch (err) {
+      console.error(err);
+      showLoading(`GIM 解析失败: ${err instanceof Error ? err.message : String(err)}`);
+      setTimeout(hideLoading, 3000);
+    } finally { btnLoadGim.disabled = false; }
+  }
+
+  btnLoadGim.addEventListener('click', async () => {
+    if (!isDesktopRuntime()) {
+      gimFileInput.click();
+      return;
+    }
+    await openGimFromDesktopDialog();
+  });
+  window.gimDesktop?.onOpenGimFileRequested(() => { void openGimFromDesktopDialog(); });
   gimFileInput.addEventListener('change', async () => {
     const files = Array.from(gimFileInput.files || []);
     if (files.length === 0) return;
@@ -91,7 +160,16 @@ export function setupOpenGimService(ctx: ViewerContext, state: AppState, showMes
       const ab = await files[0].arrayBuffer();
       const extracted = await extractGimFile(ab);
       const entries = await onGimExtracted(ctx, state, extracted, showMessage);
-      if (entries.length === 0) { showLoading('未在 GIM 文件中找到 IFC 文件'); setTimeout(hideLoading, 2000); return; }
+      if (entries.length === 0) {
+        const nativeResult = await renderNativeGimModel(ctx, state, extracted);
+        if (nativeResult) {
+          emptyTipEl.style.display = 'none';
+          showLoading(`已加载 GIM 原生几何: ${nativeResult.meshCount} 个图元`);
+          setTimeout(hideLoading, 1800);
+          return;
+        }
+        showLoading('未在 GIM 文件中找到可渲染的 IFC/MOD/PHM/DEV 内容'); setTimeout(hideLoading, 3000); return;
+      }
       hideLoading();
       openIfcModal(entries);
     } catch (err) {
