@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { ViewerContext } from '../viewer/viewerEngine.js';
 import type { AppState } from '../app/state.js';
+import type { CbmNode } from './types.js';
 import { parseKeyValue } from './cbmParser.js';
 import { fitCameraToScene } from '../viewer/camera.js';
 
@@ -739,8 +740,49 @@ function getLoadedIfcBox(ctx: ViewerContext, state: AppState): THREE.Box3 | null
   return hasBox ? box : null;
 }
 
-export function alignNativeRootToLoadedIfc(ctx: ViewerContext, state: AppState, root: THREE.Group): boolean {
-  const ifcBox = getLoadedIfcBox(ctx, state);
+function collectCbmIfcRefs(state: AppState, cbmFiles?: Set<string>): Map<string, Set<string>> {
+  const refs = new Map<string, Set<string>>();
+  if (!cbmFiles || cbmFiles.size === 0) return refs;
+
+  const addNodeRefs = (node: CbmNode | null | undefined): void => {
+    if (!node) return;
+    if (node.ifcFile && node.ifcGuid) {
+      const modelId = node.ifcFile.replace(/\.ifc$/i, '');
+      if (!refs.has(modelId)) refs.set(modelId, new Set<string>());
+      refs.get(modelId)!.add(node.ifcGuid);
+    }
+    for (const child of node.children) addNodeRefs(child);
+  };
+
+  for (const cbmFile of cbmFiles) {
+    const fileName = normalizeRef(cbmFile).split('/').pop() || cbmFile;
+    addNodeRefs(state.cbmNodeIndex.get(fileName));
+  }
+
+  return refs;
+}
+
+async function getIfcBoxForCbmRefs(ctx: ViewerContext, state: AppState, cbmFiles?: Set<string>): Promise<THREE.Box3 | null> {
+  const refs = collectCbmIfcRefs(state, cbmFiles);
+  if (refs.size === 0) return null;
+
+  const box = new THREE.Box3();
+  let hasBox = false;
+  for (const [modelId, guids] of refs) {
+    const model = ctx.fragments.list.get(modelId);
+    if (!model || guids.size === 0) continue;
+    const localIds = (await model.getLocalIdsByGuids(Array.from(guids))).filter((id): id is number => id !== null);
+    if (localIds.length === 0) continue;
+    const modelBox = await model.getMergedBox(localIds);
+    if (modelBox.isEmpty()) continue;
+    box.union(modelBox);
+    hasBox = true;
+  }
+  return hasBox ? box : null;
+}
+
+export async function alignNativeRootToLoadedIfc(ctx: ViewerContext, state: AppState, root: THREE.Group, cbmFiles?: Set<string>): Promise<boolean> {
+  const ifcBox = (await getIfcBoxForCbmRefs(ctx, state, cbmFiles)) || getLoadedIfcBox(ctx, state);
   if (!ifcBox) return false;
   root.updateMatrixWorld(true);
   const nativeBox = new THREE.Box3().setFromObject(root);
@@ -749,7 +791,8 @@ export function alignNativeRootToLoadedIfc(ctx: ViewerContext, state: AppState, 
   const ifcCenter = ifcBox.getCenter(new THREE.Vector3());
   const nativeCenter = nativeBox.getCenter(new THREE.Vector3());
   const delta = ifcCenter.sub(nativeCenter);
-  // 水平中心对齐，Z 方向按底部贴齐，避免把设备细节整体抬高/压低。
+  // 优先对齐到 CBM/IFCGUID 对应的 IFC 构件包围盒；没有映射时才退回到结构主体包围盒。
+  // Z 方向按底部贴齐，避免把设备细节整体抬高/压低。
   delta.z = ifcBox.min.z - nativeBox.min.z;
   root.position.add(delta);
   root.updateMatrixWorld(true);

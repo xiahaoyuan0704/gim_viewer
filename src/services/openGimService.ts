@@ -87,11 +87,12 @@ export async function loadSelectedIfcFiles(ctx: ViewerContext, state: AppState, 
         showLoading('正在叠加 GIM 原生设备细节...');
         ctx.fragments.core.update(true);
         await waitForViewerFrame();
-        const nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles, { cbmFiles: getNativeOverlayCbmFiles(state, selected) });
+        const overlayCbmFiles = getNativeOverlayCbmFiles(state, selected);
+        const nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles, { cbmFiles: overlayCbmFiles });
         if (nativeResult) {
           ctx.fragments.core.update(true);
           await waitForViewerFrame();
-          if (alignNativeRootToLoadedIfc(ctx, state, nativeResult.group)) state.hasFittedCamera = false;
+          if (await alignNativeRootToLoadedIfc(ctx, state, nativeResult.group, overlayCbmFiles)) state.hasFittedCamera = false;
         }
       } catch (nativeErr) {
         console.warn('GIM 原生细节渲染失败，继续显示 IFC:', nativeErr);
