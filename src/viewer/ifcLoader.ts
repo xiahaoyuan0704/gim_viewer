@@ -7,10 +7,14 @@ export type ModelEventCallbacks = {
   onModelRemoved: (modelId: string) => void;
 };
 
+function getIfcWasmBasePath(): string {
+  return new URL('./', window.location.href).href;
+}
+
 /** 初始化 IFC 引擎（仅首次调用生效） */
 export async function initEngine(ctx: ViewerContext, state: AppState): Promise<void> {
   if (state.initialized) return;
-  await ctx.ifcLoader.setup({ autoSetWasm: false, wasm: { path: '/', absolute: true } });
+  await ctx.ifcLoader.setup({ autoSetWasm: false, wasm: { path: getIfcWasmBasePath(), absolute: true } });
   const workerUrl = await OBC.FragmentsManager.getWorker();
   ctx.fragments.init(workerUrl);
   ctx.world.camera.controls?.addEventListener('update', () => ctx.fragments.core.update());
