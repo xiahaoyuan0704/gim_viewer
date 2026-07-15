@@ -4,9 +4,9 @@
   "description": "GIM 浏览器",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
+    "dev": "vite --config vite.config.ts",
+    "build": "tsc && vite build --config vite.config.ts",
+    "preview": "vite preview --config vite.config.ts",
     "desktop:dev": "npm run electron:dev",
     "electron:dev": "npm run build && node scripts/run-electron.cjs dev",
     "desktop:pack": "npm run build && node scripts/run-electron.cjs pack",
