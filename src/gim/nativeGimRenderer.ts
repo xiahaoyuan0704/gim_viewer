@@ -292,20 +292,73 @@ function parseVector(value = ''): THREE.Vector3 | null {
   return new THREE.Vector3(nums[0], nums[1], nums[2]);
 }
 
+function parseVectorList(value = ''): THREE.Vector3[] {
+  const grouped = value
+    .split(';')
+    .map((part) => parseNumbers(part))
+    .filter((nums) => nums.length >= 3)
+    .map((nums) => new THREE.Vector3(nums[0], nums[1], nums[2]));
+  if (grouped.length > 1) return grouped;
+
+  const nums = parseNumbers(value);
+  const points: THREE.Vector3[] = [];
+  for (let i = 0; i + 2 < nums.length; i += 3) points.push(new THREE.Vector3(nums[i], nums[i + 1], nums[i + 2]));
+  return points;
+}
+
+function pushUniquePoint(points: THREE.Vector3[], point: THREE.Vector3 | null): void {
+  if (!point) return;
+  if (points.some((existing) => existing.distanceToSquared(point) < 1e-6)) return;
+  points.push(point);
+}
+
+function getIndexedWirePoints(el: Element): THREE.Vector3[] {
+  const indexed: Array<{ index: number; point: THREE.Vector3 }> = [];
+  for (const attr of Array.from(el.attributes)) {
+    const match = attr.name.match(/^(?:P|Point|Coord|Coordinate|ControlPoint)(\d+)$/i);
+    if (!match) continue;
+    const point = parseVector(attr.value);
+    if (point) indexed.push({ index: Number(match[1]), point });
+  }
+  return indexed.sort((a, b) => a.index - b.index).map((item) => item.point);
+}
+
+function collectWirePoints(el: Element): THREE.Vector3[] {
+  const points: THREE.Vector3[] = [];
+  pushUniquePoint(points, parseVector(el.getAttribute('StartCoord') || el.getAttribute('Start') || el.getAttribute('BeginCoord') || ''));
+
+  for (const attrName of ['Array', 'Points', 'PointArray', 'Path', 'Route', 'Coords', 'Coordinates', 'ControlPoints', 'MiddleCoords']) {
+    for (const point of parseVectorList(el.getAttribute(attrName) || '')) pushUniquePoint(points, point);
+  }
+
+  for (const point of getIndexedWirePoints(el)) pushUniquePoint(points, point);
+  pushUniquePoint(points, parseVector(el.getAttribute('MiddleCoord') || el.getAttribute('MidCoord') || ''));
+  pushUniquePoint(points, parseVector(el.getAttribute('EndCoord') || el.getAttribute('End') || ''));
+  return points;
+}
+
+function createTubeAlongPoints(points: THREE.Vector3[], radius: number): THREE.BufferGeometry | null {
+  if (points.length < 2) return null;
+  if (points.length === 2) {
+    const [start, end] = points;
+    const delta = end.clone().sub(start);
+    const length = delta.length();
+    if (length <= 0) return null;
+    const geometry = makeZAxisCylinder(radius, radius, length, 12);
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), delta.normalize());
+    const center = start.clone().add(end).multiplyScalar(0.5);
+    geometry.applyMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(q));
+    geometry.translate(center.x, center.y, center.z);
+    return geometry;
+  }
+
+  const curve = new THREE.CatmullRomCurve3(points, false, 'centripetal', 0.35);
+  return new THREE.TubeGeometry(curve, Math.max(12, points.length * 10), radius, 10, false);
+}
+
 function createWireGeometry(el: Element): THREE.BufferGeometry | null {
-  const start = parseVector(el.getAttribute('StartCoord') || '');
-  const end = parseVector(el.getAttribute('EndCoord') || '');
-  if (!start || !end) return createFallbackGeometry(el);
-  const delta = end.clone().sub(start);
-  const length = delta.length();
-  if (length <= 0) return null;
-  const radius = Number(el.getAttribute('D') || el.getAttribute('R') || 1) / 2;
-  const geometry = makeZAxisCylinder(Math.max(radius, 0.1), Math.max(radius, 0.1), length, 12);
-  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), delta.normalize());
-  const center = start.clone().add(end).multiplyScalar(0.5);
-  geometry.applyMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(q));
-  geometry.translate(center.x, center.y, center.z);
-  return geometry;
+  const radius = Math.max(Number(el.getAttribute('D') || el.getAttribute('R') || 1) / 2, 0.1);
+  return createTubeAlongPoints(collectWirePoints(el), radius) || createFallbackGeometry(el);
 }
 
 function createCircularGasketGeometry(el: Element): THREE.BufferGeometry {
