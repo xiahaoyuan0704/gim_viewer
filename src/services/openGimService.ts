@@ -88,9 +88,9 @@ export async function loadSelectedIfcFiles(ctx: ViewerContext, state: AppState, 
         ctx.fragments.core.update(true);
         await waitForViewerFrame();
         const overlayCbmFiles = getNativeOverlayCbmFiles(state, selected);
-        // IFC 与原生 CBM/DEV/PHM 都来自同一 GIM 工程坐标；叠加时保留原始坐标，
-        // 避免按包围盒二次对齐把整组设备挪到站区外。
-        const nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles, { cbmFiles: overlayCbmFiles, alignToIfc: false });
+        // IFC 加载时会通过 Fragments 的 baseCoordinationMatrix 做坐标归一化；
+        // 原生 CBM/DEV/PHM 叠加时使用同一基准变换，避免仍停留在 GIM 原始工程坐标而偏到站区外。
+        const nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles, { cbmFiles: overlayCbmFiles, alignToIfc: false, coordinateWithIfc: true });
         if (nativeResult) {
           ctx.fragments.core.update(true);
           await waitForViewerFrame();

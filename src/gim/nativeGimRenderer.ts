@@ -33,6 +33,7 @@ export interface NativeGimRenderResult extends NativeStats {
 export interface NativeGimRenderOptions {
   cbmFiles?: Set<string>;
   alignToIfc?: boolean;
+  coordinateWithIfc?: boolean;
 }
 
 function buildPathIndex(files: Map<string, File>): Map<string, string> {
@@ -857,6 +858,14 @@ async function alignNativeCbmGroupsToIfc(ctx: ViewerContext, root: THREE.Group, 
   return aligned > 0;
 }
 
+function applyIfcBaseCoordinateTransform(ctx: ViewerContext, root: THREE.Group): boolean {
+  const baseMatrix = ctx.fragments.baseCoordinationMatrix;
+  if (!baseMatrix) return false;
+  root.applyMatrix4(baseMatrix.clone().invert());
+  root.updateMatrixWorld(true);
+  return true;
+}
+
 export async function alignNativeRootToLoadedIfc(ctx: ViewerContext, state: AppState, root: THREE.Group, cbmFiles?: Set<string>): Promise<boolean> {
   const ifcBox = (await getIfcBoxForCbmRefs(ctx, state, cbmFiles)) || getLoadedIfcBox(ctx, state);
   if (!ifcBox) return false;
@@ -930,7 +939,8 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
   }
 
   if (renderCtx.stats.meshCount === 0) return null;
-  const alignedToIfc = options.alignToIfc !== false ? await alignNativeCbmGroupsToIfc(ctx, root, options.cbmFiles) : false;
+  const coordinatedToIfc = options.coordinateWithIfc ? applyIfcBaseCoordinateTransform(ctx, root) : false;
+  const alignedToIfc = !coordinatedToIfc && options.alignToIfc !== false ? await alignNativeCbmGroupsToIfc(ctx, root, options.cbmFiles) : coordinatedToIfc;
   optimizeNativeRoot(root);
   ((ctx.world.scene as any).three as THREE.Scene).add(root);
   state.hasFittedCamera = false;
