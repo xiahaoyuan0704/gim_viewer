@@ -13,7 +13,7 @@ import { buildAndRenderCbmTree } from '../ui/cbmTreeView.js';
 import { renderFileDevPanel } from '../ui/fileDevView.js';
 import { loadingEl, emptyTipEl, gimFileInput, btnLoadGim } from '../ui/dom.js';
 import { isDesktopRuntime, toArrayBuffer } from '../desktop/electron.js';
-import { alignNativeRootToLoadedIfc, renderNativeGimModel } from '../gim/nativeGimRenderer.js';
+import { renderNativeGimModel } from '../gim/nativeGimRenderer.js';
 
 function showLoading(text: string) { loadingEl.textContent = text; loadingEl.style.display = 'block'; }
 function hideLoading() { loadingEl.style.display = 'none'; }
@@ -88,11 +88,12 @@ export async function loadSelectedIfcFiles(ctx: ViewerContext, state: AppState, 
         ctx.fragments.core.update(true);
         await waitForViewerFrame();
         const overlayCbmFiles = getNativeOverlayCbmFiles(state, selected);
-        const nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles, { cbmFiles: overlayCbmFiles });
+        // IFC 与原生 CBM/DEV/PHM 都来自同一 GIM 工程坐标；叠加时保留原始坐标，
+        // 避免按包围盒二次对齐把整组设备挪到站区外。
+        const nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles, { cbmFiles: overlayCbmFiles, alignToIfc: false });
         if (nativeResult) {
           ctx.fragments.core.update(true);
           await waitForViewerFrame();
-          if (!nativeResult.alignedToIfc && await alignNativeRootToLoadedIfc(ctx, state, nativeResult.group, overlayCbmFiles)) state.hasFittedCamera = false;
         }
       } catch (nativeErr) {
         console.warn('GIM 原生细节渲染失败，继续显示 IFC:', nativeErr);

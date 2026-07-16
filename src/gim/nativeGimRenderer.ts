@@ -32,6 +32,7 @@ export interface NativeGimRenderResult extends NativeStats {
 
 export interface NativeGimRenderOptions {
   cbmFiles?: Set<string>;
+  alignToIfc?: boolean;
 }
 
 function buildPathIndex(files: Map<string, File>): Map<string, string> {
@@ -929,7 +930,7 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
   }
 
   if (renderCtx.stats.meshCount === 0) return null;
-  const alignedToIfc = await alignNativeCbmGroupsToIfc(ctx, root, options.cbmFiles);
+  const alignedToIfc = options.alignToIfc !== false ? await alignNativeCbmGroupsToIfc(ctx, root, options.cbmFiles) : false;
   optimizeNativeRoot(root);
   ((ctx.world.scene as any).three as THREE.Scene).add(root);
   state.hasFittedCamera = false;
