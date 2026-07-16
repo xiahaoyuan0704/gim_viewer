@@ -861,7 +861,7 @@ async function alignNativeCbmGroupsToIfc(ctx: ViewerContext, root: THREE.Group, 
 function applyIfcBaseCoordinateTransform(ctx: ViewerContext, root: THREE.Group): boolean {
   const baseMatrix = ctx.fragments.baseCoordinationMatrix;
   if (!baseMatrix) return false;
-  root.applyMatrix4(baseMatrix.clone().invert());
+  root.applyMatrix4(baseMatrix.clone());
   root.updateMatrixWorld(true);
   return true;
 }
