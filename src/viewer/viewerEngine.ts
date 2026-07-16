@@ -18,7 +18,20 @@ export function createViewerEngine(container: HTMLElement): ViewerContext {
   ((world as any).scene as OBC.SimpleScene).setup();
   ((world as any).scene as any).three.background = new THREE.Color(0xeeeeee);
   world.renderer = new OBC.SimpleRenderer(components, container);
+  const renderer = ((world.renderer as any).three as THREE.WebGLRenderer | undefined);
+  renderer?.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
   world.camera = new OBC.OrthoPerspectiveCamera(components);
+  const camera = (world.camera as any).three as THREE.PerspectiveCamera | THREE.OrthographicCamera | undefined;
+  if (camera) {
+    camera.near = 0.01;
+    camera.far = 1_000_000_000;
+    camera.updateProjectionMatrix();
+  }
+  const controls = (world.camera as any).controls as { maxDistance?: number; infinityDolly?: boolean } | undefined;
+  if (controls) {
+    controls.maxDistance = Number.POSITIVE_INFINITY;
+    controls.infinityDolly = true;
+  }
   components.init();
   components.get(OBC.Grids).create(world);
 
