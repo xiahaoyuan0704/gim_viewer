@@ -353,7 +353,7 @@ function createTubeAlongPoints(points: THREE.Vector3[], radius: number): THREE.B
   }
 
   const curve = new THREE.CatmullRomCurve3(points, false, 'centripetal', 0.35);
-  return new THREE.TubeGeometry(curve, Math.max(12, points.length * 10), radius, 10, false);
+  return new THREE.TubeGeometry(curve, Math.min(64, Math.max(8, points.length * 6)), radius, 6, false);
 }
 
 function createWireGeometry(el: Element): THREE.BufferGeometry | null {
@@ -750,8 +750,11 @@ function optimizeNativeRoot(root: THREE.Group): void {
     const merged = mergeBufferGeometries(geometries);
     for (const geometry of geometries) geometry.dispose();
     if (!merged) continue;
+    merged.computeBoundingBox();
+    merged.computeBoundingSphere();
     const mesh = new THREE.Mesh(merged, material);
     mesh.name = 'GIM_NATIVE_MERGED';
+    mesh.frustumCulled = false;
     root.add(mesh);
   }
 }
@@ -937,6 +940,17 @@ export async function alignNativeRootToLoadedIfc(ctx: ViewerContext, state: AppS
   return true;
 }
 
+function applyNativeRuntimeHints(root: THREE.Group): void {
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    obj.frustumCulled = false;
+    if (obj.geometry instanceof THREE.BufferGeometry) {
+      obj.geometry.computeBoundingBox();
+      obj.geometry.computeBoundingSphere();
+    }
+  });
+}
+
 export function removePreviousNativeRoot(ctx: ViewerContext): void {
   const scene = (ctx.world.scene as any).three as THREE.Scene;
   const previous = scene.getObjectByName(ROOT_NAME);
@@ -995,6 +1009,7 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
   const coordinatedToIfc = options.coordinateWithIfc ? applyIfcBaseCoordinateTransform(ctx, root) : false;
   const alignedToIfc = !coordinatedToIfc && options.alignToIfc !== false ? await alignNativeCbmGroupsToIfc(ctx, root, options.cbmFiles) : coordinatedToIfc;
   optimizeNativeRoot(root);
+  applyNativeRuntimeHints(root);
   ((ctx.world.scene as any).three as THREE.Scene).add(root);
   state.hasFittedCamera = false;
   fitCameraToScene(ctx, state);
