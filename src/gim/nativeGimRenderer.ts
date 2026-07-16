@@ -27,6 +27,7 @@ interface RenderContext {
 
 export interface NativeGimRenderResult extends NativeStats {
   group: THREE.Group;
+  alignedToIfc: boolean;
 }
 
 export interface NativeGimRenderOptions {
@@ -595,6 +596,9 @@ async function renderCbm(ctx: RenderContext, path: string, parent: THREE.Object3
   const kv = parseKeyValue(await file.text());
   const group = new THREE.Group();
   group.name = kv.PARTNAME || kv.SYSCLASSIFYNAME || kv.ENTITYNAME || path;
+  group.userData.cbmPath = path;
+  group.userData.ifcFile = kv.IFCFILE || '';
+  group.userData.ifcGuid = (kv.IFCGUID || '').replace(/\$+$/, '').trim();
   group.applyMatrix4(parseMatrix(kv.TRANSFORMMATRIX));
   parent.add(group);
   ctx.stats.cbmCount += 1;
@@ -781,6 +785,77 @@ async function getIfcBoxForCbmRefs(ctx: ViewerContext, state: AppState, cbmFiles
   return hasBox ? box : null;
 }
 
+async function getIfcBoxForCbmGroup(ctx: ViewerContext, group: THREE.Object3D): Promise<THREE.Box3 | null> {
+  const ifcFile = typeof group.userData.ifcFile === 'string' ? group.userData.ifcFile : '';
+  const ifcGuid = typeof group.userData.ifcGuid === 'string' ? group.userData.ifcGuid : '';
+  if (!ifcFile || !ifcGuid) return null;
+  const modelId = ifcFile.replace(/\.ifc$/i, '');
+  const model = ctx.fragments.list.get(modelId);
+  if (!model) return null;
+  const [localId] = await model.getLocalIdsByGuids([ifcGuid]);
+  if (localId === null) return null;
+  const box = await model.getMergedBox([localId]);
+  return box.isEmpty() ? null : box;
+}
+
+function selectedCbmKeys(cbmFiles?: Set<string>): Set<string> {
+  const keys = new Set<string>();
+  for (const ref of cbmFiles || []) {
+    const normalized = normalizeRef(ref).toLowerCase();
+    keys.add(normalized);
+    const fileName = normalized.split('/').pop();
+    if (fileName) keys.add(fileName);
+  }
+  return keys;
+}
+
+function isSelectedCbmGroup(group: THREE.Object3D, keys: Set<string>): boolean {
+  const cbmPath = typeof group.userData.cbmPath === 'string' ? normalizeRef(group.userData.cbmPath).toLowerCase() : '';
+  if (!cbmPath) return false;
+  return keys.has(cbmPath) || keys.has(cbmPath.split('/').pop() || cbmPath);
+}
+
+function worldDeltaToParentLocal(parent: THREE.Object3D, delta: THREE.Vector3): THREE.Vector3 {
+  parent.updateMatrixWorld(true);
+  const origin = new THREE.Vector3();
+  const target = delta.clone();
+  return parent.worldToLocal(target).sub(parent.worldToLocal(origin));
+}
+
+async function alignNativeCbmGroupsToIfc(ctx: ViewerContext, root: THREE.Group, cbmFiles?: Set<string>): Promise<boolean> {
+  const keys = selectedCbmKeys(cbmFiles);
+  if (keys.size === 0) return false;
+  root.updateMatrixWorld(true);
+  let aligned = 0;
+  const candidates: THREE.Object3D[] = [];
+  const hasIfcLink = (obj: THREE.Object3D) => Boolean(obj.userData.ifcFile && obj.userData.ifcGuid);
+  const collectCandidates = (obj: THREE.Object3D, insideSelected: boolean): void => {
+    const selected = isSelectedCbmGroup(obj, keys);
+    if ((selected || insideSelected) && hasIfcLink(obj)) {
+      candidates.push(obj);
+      return;
+    }
+    for (const child of obj.children) collectCandidates(child, insideSelected || selected);
+  };
+  collectCandidates(root, false);
+
+  for (const group of candidates) {
+    const ifcBox = await getIfcBoxForCbmGroup(ctx, group);
+    if (!ifcBox) continue;
+    group.updateMatrixWorld(true);
+    const nativeBox = new THREE.Box3().setFromObject(group);
+    if (nativeBox.isEmpty()) continue;
+    const delta = ifcBox.getCenter(new THREE.Vector3()).sub(nativeBox.getCenter(new THREE.Vector3()));
+    delta.z = ifcBox.min.z - nativeBox.min.z;
+    const parent = group.parent || root;
+    group.position.add(worldDeltaToParentLocal(parent, delta));
+    group.updateMatrixWorld(true);
+    aligned += 1;
+  }
+
+  return aligned > 0;
+}
+
 export async function alignNativeRootToLoadedIfc(ctx: ViewerContext, state: AppState, root: THREE.Group, cbmFiles?: Set<string>): Promise<boolean> {
   const ifcBox = (await getIfcBoxForCbmRefs(ctx, state, cbmFiles)) || getLoadedIfcBox(ctx, state);
   if (!ifcBox) return false;
@@ -854,9 +929,10 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
   }
 
   if (renderCtx.stats.meshCount === 0) return null;
+  const alignedToIfc = await alignNativeCbmGroupsToIfc(ctx, root, options.cbmFiles);
   optimizeNativeRoot(root);
   ((ctx.world.scene as any).three as THREE.Scene).add(root);
   state.hasFittedCamera = false;
   fitCameraToScene(ctx, state);
-  return { group: root, ...renderCtx.stats };
+  return { group: root, alignedToIfc, ...renderCtx.stats };
 }

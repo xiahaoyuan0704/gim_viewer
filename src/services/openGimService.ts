@@ -92,7 +92,7 @@ export async function loadSelectedIfcFiles(ctx: ViewerContext, state: AppState, 
         if (nativeResult) {
           ctx.fragments.core.update(true);
           await waitForViewerFrame();
-          if (await alignNativeRootToLoadedIfc(ctx, state, nativeResult.group, overlayCbmFiles)) state.hasFittedCamera = false;
+          if (!nativeResult.alignedToIfc && await alignNativeRootToLoadedIfc(ctx, state, nativeResult.group, overlayCbmFiles)) state.hasFittedCamera = false;
         }
       } catch (nativeErr) {
         console.warn('GIM 原生细节渲染失败，继续显示 IFC:', nativeErr);
