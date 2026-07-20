@@ -40,7 +40,7 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 720,
     title: 'GIM 桌面阅读器',
-    backgroundColor: '#1e1e1e',
+    backgroundColor: '#edf4f7',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
