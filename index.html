@@ -78,6 +78,9 @@
       .tree-toggle.expanded { transform: rotate(90deg); }
       .tree-toggle.leaf { visibility: hidden; }
       .tree-icon { margin-right: 7px; font-size: 14px; flex-shrink: 0; filter: saturate(.8); }
+      .tree-model-checkbox { width: 15px; height: 15px; margin: 0 8px 0 1px; accent-color: var(--accent); cursor: pointer; }
+      .tree-model-row { margin: 2px 0 2px 18px; }
+      .ifc-model-group { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
       .tree-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .tree-children { display: none; padding-left: 15px; }
       .tree-children.expanded { display: block; }
@@ -137,8 +140,8 @@
         <div id="controls">
           <button id="btn-load-gim" class="btn">打开 GIM 文件</button>
           <input id="gim-file-input" class="hidden-input" type="file" accept=".gim" />
-          <button id="btn-load-local" class="btn btn-secondary">打开 IFC 文件</button>
-          <input id="file-input" class="hidden-input" type="file" accept=".ifc" multiple />
+          <button id="btn-load-local" class="btn btn-secondary">打开 IFC / STL / SVC 文件</button>
+          <input id="file-input" class="hidden-input" type="file" accept=".ifc,.stl,.svc" multiple />
           <button id="btn-clear" class="btn btn-secondary">清空场景</button>
         </div>
         <div id="sidebar-tabs">

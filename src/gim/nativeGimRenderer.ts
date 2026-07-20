@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import type { ViewerContext } from '../viewer/viewerEngine.js';
 import type { AppState } from '../app/state.js';
 import type { CbmNode } from './types.js';
@@ -578,6 +579,21 @@ async function renderMod(ctx: RenderContext, path: string, parent: THREE.Object3
 }
 
 
+async function renderStl(ctx: RenderContext, path: string, parent: THREE.Object3D, color?: string): Promise<void> {
+  const file = ctx.files.get(path);
+  if (!file) return;
+  try {
+    const geometry = new STLLoader().parse(await file.arrayBuffer());
+    geometry.computeVertexNormals();
+    const mesh = new THREE.Mesh(geometry, makeMaterial(parseColor(null, color)));
+    mesh.name = path;
+    parent.add(mesh);
+    ctx.stats.meshCount += 1;
+  } catch (error) {
+    console.warn(`STL 解析失败 (${path}):`, error);
+  }
+}
+
 async function renderPhm(ctx: RenderContext, path: string, parent: THREE.Object3D): Promise<void> {
   if (ctx.visitingPhm.has(path)) return;
   ctx.visitingPhm.add(path);
@@ -593,7 +609,7 @@ async function renderPhm(ctx: RenderContext, path: string, parent: THREE.Object3
   const modelRefs = refs.length > 0 ? refs : parseIndexedRefs(kv, 'SOLIDMODELS.NUM', 'SOLIDMODEL', true);
   for (const item of modelRefs) {
     const ref = item.ref;
-    const childPath = resolveFilePath(ctx, ref, ['MOD', 'PHM']);
+    const childPath = resolveFilePath(ctx, ref, ['MOD', 'PHM', 'DEV']);
     if (!childPath) continue;
     const child = new THREE.Group();
     child.name = ref;
@@ -601,6 +617,7 @@ async function renderPhm(ctx: RenderContext, path: string, parent: THREE.Object3
     group.add(child);
     if (/\.mod$/i.test(childPath)) await renderMod(ctx, childPath, child, item.color);
     else if (/\.phm$/i.test(childPath)) await renderPhm(ctx, childPath, child);
+    else if (/\.stl$/i.test(childPath)) await renderStl(ctx, childPath, child, item.color);
   }
   ctx.visitingPhm.delete(path);
 }
@@ -622,7 +639,7 @@ async function renderDev(ctx: RenderContext, path: string, parent: THREE.Object3
   const solidRefs = orderedSolidRefs.length > 0 ? orderedSolidRefs : parseIndexedRefs(kv, 'SOLIDMODELS.NUM', 'SOLIDMODEL');
   for (const item of solidRefs) {
     const ref = item.ref;
-    const phmPath = resolveFilePath(ctx, ref, ['PHM', 'MOD']);
+    const phmPath = resolveFilePath(ctx, ref, ['PHM', 'MOD', 'DEV']);
     if (!phmPath) continue;
     const child = new THREE.Group();
     child.name = ref;
@@ -630,6 +647,7 @@ async function renderDev(ctx: RenderContext, path: string, parent: THREE.Object3
     group.add(child);
     if (/\.phm$/i.test(phmPath)) await renderPhm(ctx, phmPath, child);
     else if (/\.mod$/i.test(phmPath)) await renderMod(ctx, phmPath, child);
+    else if (/\.stl$/i.test(phmPath)) await renderStl(ctx, phmPath, child);
   }
 
   const orderedSubRefs = parseOrderedRefs(text, 'SUBDEVICES.NUM', /^SUBDEVICES?/i, 2);
@@ -985,6 +1003,7 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
   const devFiles = await pickRootDevFiles(files, allDevFiles);
   const phmFiles = listFiles(files, '.phm');
   const modFiles = listFiles(files, '.mod');
+  const stlFiles = listFiles(files, '.stl');
 
   const renderedFromCbm = await renderFromCbmIfPossible(renderCtx, root, options);
 
@@ -1001,6 +1020,13 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
       group.position.x = offset;
       root.add(group);
       await renderMod(renderCtx, path, group);
+      offset += 2000;
+    }
+    for (const path of stlFiles) {
+      const group = new THREE.Group();
+      group.position.x = offset;
+      root.add(group);
+      await renderStl(renderCtx, path, group);
       offset += 2000;
     }
   }
