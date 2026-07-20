@@ -11,6 +11,7 @@ import { setupOpenIfcService } from '../services/openIfcService.js';
 import { resetHighlight } from '../viewer/highlight.js';
 import { clearMeshModels } from '../viewer/meshLoader.js';
 import { removePreviousNativeRoot } from '../gim/nativeGimRenderer.js';
+import { clearGimHeader } from '../ui/gimHeaderView.js';
 import { container, btnClear, loadingEl } from '../ui/dom.js';
 import type { ModelEventCallbacks } from '../viewer/ifcLoader.js';
 
@@ -54,6 +55,7 @@ async function bootstrapAsync(): Promise<void> {
     document.getElementById('model-list')!.innerHTML = '';
     document.getElementById('cbm-tree-panel')!.innerHTML = '';
     document.getElementById('file-dev-panel')!.innerHTML = '';
+    clearGimHeader();
     document.getElementById('props-drawer-body')!.innerHTML = '<div class="props-empty">选择层级树节点查看属性</div>';
     document.getElementById('empty-tip')!.style.display = '';
     await resetHighlight(ctx, state);

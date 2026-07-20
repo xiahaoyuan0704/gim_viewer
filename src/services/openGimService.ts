@@ -14,6 +14,8 @@ import { renderFileDevPanel } from '../ui/fileDevView.js';
 import { loadingEl, emptyTipEl, gimFileInput, btnLoadGim } from '../ui/dom.js';
 import { isDesktopRuntime, toArrayBuffer } from '../desktop/electron.js';
 import { renderNativeGimModel } from '../gim/nativeGimRenderer.js';
+import { extractGimFile, parseGimHeader } from '../gim/gimExtractor.js';
+import { renderGimHeader } from '../ui/gimHeaderView.js';
 
 function showLoading(text: string) { loadingEl.textContent = text; loadingEl.style.display = 'block'; }
 function hideLoading() { loadingEl.style.display = 'none'; }
@@ -120,8 +122,9 @@ export function setupOpenGimService(ctx: ViewerContext, state: AppState, showMes
       const selectedFile = await window.gimDesktop?.openGimFile();
       if (!selectedFile) return;
       showLoading(`正在解压 GIM 文件: ${selectedFile.name}...`);
-      const { extractGimFile } = await import('../gim/gimExtractor.js');
-      const extracted = await extractGimFile(toArrayBuffer(selectedFile.data));
+      const source = toArrayBuffer(selectedFile.data);
+      renderGimHeader(parseGimHeader(source, selectedFile.name));
+      const extracted = await extractGimFile(source);
       const entries = await onGimExtracted(ctx, state, extracted, showMessage);
       if (entries.length === 0) {
         const nativeResult = await renderNativeGimModel(ctx, state, extracted);
@@ -156,9 +159,9 @@ export function setupOpenGimService(ctx: ViewerContext, state: AppState, showMes
     btnLoadGim.disabled = true;
     try {
       showLoading('正在加载 GIM 解压模块...');
-      const { extractGimFile } = await import('../gim/gimExtractor.js');
       showLoading('正在解压 GIM 文件...');
       const ab = await files[0].arrayBuffer();
+      renderGimHeader(parseGimHeader(ab, files[0].name));
       const extracted = await extractGimFile(ab);
       const entries = await onGimExtracted(ctx, state, extracted, showMessage);
       if (entries.length === 0) {

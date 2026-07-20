@@ -1,3 +1,5 @@
+import type { GimHeaderInfo } from './types.js';
+
 let archiveInitialized = false;
 
 async function getArchive() {
@@ -23,6 +25,36 @@ export function findArchiveOffset(buffer: ArrayBuffer): number {
     if (v[i] === 0x50 && v[i + 1] === 0x4b && v[i + 2] === 0x03 && v[i + 3] === 0x04) return i;
   }
   return 0;
+}
+
+
+/** 读取 GIMPKGS 压缩数据之前的可读文件头信息。 */
+export function parseGimHeader(arrayBuffer: ArrayBuffer, fileName: string): GimHeaderInfo {
+  const bytes = new Uint8Array(arrayBuffer);
+  const archiveOffset = findArchiveOffset(arrayBuffer);
+  const hasGimHeader = bytes.length >= 7 && String.fromCharCode(...bytes.slice(0, 7)) === 'GIMPKGS';
+  const signature = archiveOffset > 0 ? bytes.slice(archiveOffset, archiveOffset + 6) : new Uint8Array();
+  const archiveFormat = signature[0] === 0x37 && signature[1] === 0x7a ? '7z' : signature[0] === 0x50 && signature[1] === 0x4b ? 'ZIP' : '未知';
+  const prefixEnd = archiveOffset > 0 ? archiveOffset : Math.min(bytes.length, 4096);
+  const rawText = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(7, prefixEnd))
+    .replace(/\0/g, '\n').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]+/g, ' ').trim();
+  const fields: Array<{ key: string; value: string }> = [
+    { key: '文件名称', value: fileName },
+    { key: '文件大小', value: `${(bytes.byteLength / 1024 / 1024).toFixed(2)} MB` },
+    { key: '文件签名', value: hasGimHeader ? 'GIMPKGS' : '未检测到 GIMPKGS 头' },
+    { key: '压缩格式', value: archiveFormat },
+    { key: '压缩数据偏移', value: archiveOffset > 0 ? `${archiveOffset} bytes` : '未定位' },
+  ];
+  for (const line of rawText.split(/\r?\n/)) {
+    const separator = line.indexOf('=');
+    if (separator <= 0) continue;
+    const key = line.slice(0, separator).trim();
+    const value = line.slice(separator + 1).trim();
+    if (key && value && key.length <= 48) fields.push({ key, value });
+  }
+  const readable = rawText.replace(/\s+/g, ' ').trim();
+  if (readable && !fields.slice(5).length) fields.push({ key: '头部信息', value: readable.slice(0, 300) });
+  return { fileName, fileSize: bytes.byteLength, hasGimHeader, archiveOffset, archiveFormat, fields };
 }
 
 /** 将 libarchive.js 解压结果展平为 Map<path, File> */

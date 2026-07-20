@@ -59,7 +59,9 @@
       .tab-panel::-webkit-scrollbar, #props-drawer-body::-webkit-scrollbar, .modal-body::-webkit-scrollbar { width: 6px; }
       .tab-panel::-webkit-scrollbar-thumb, #props-drawer-body::-webkit-scrollbar-thumb, .modal-body::-webkit-scrollbar-thumb { background: #385069; border-radius: 99px; }
 
-      #model-list { padding: 13px; }
+      #model-list, #gim-header-panel { padding: 13px; }
+      .header-card { padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: rgba(255,255,255,.035); }
+      .header-card-title { margin: 0 0 10px; color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .04em; }
       .model-item { display: flex; align-items: center; justify-content: space-between; padding: 10px; margin-bottom: 7px; background: rgba(255,255,255,.04); border: 1px solid transparent; border-radius: 9px; font-size: 13px; transition: background .15s, border-color .15s; }
       .model-item:hover { background: var(--surface-hover); border-color: var(--border); }
       .model-item .model-checkbox { margin-right: 8px; accent-color: var(--accent); cursor: pointer; }
@@ -148,6 +150,7 @@
           <button class="tab-btn active" data-tab="tab-models">模型</button>
           <button class="tab-btn" data-tab="tab-tree">层级树</button>
           <button class="tab-btn" data-tab="tab-filedev">文件设备</button>
+          <button class="tab-btn" data-tab="tab-header">文件信息</button>
         </div>
         <div id="tab-models" class="tab-panel active">
           <div id="model-list"></div>
@@ -157,6 +160,9 @@
         </div>
         <div id="tab-filedev" class="tab-panel">
           <div id="file-dev-panel"></div>
+        </div>
+        <div id="tab-header" class="tab-panel">
+          <div id="gim-header-panel"><div class="props-empty">打开 GIM 文件后显示文件头信息</div></div>
         </div>
       </aside>
 
