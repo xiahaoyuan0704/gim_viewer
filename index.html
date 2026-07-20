@@ -47,6 +47,7 @@
       #btn-load-gim::before { content: "＋"; font-size: 18px; font-weight: 400; line-height: .8; }
       #btn-load-local::before { content: "⌑"; font-size: 17px; }
       #btn-clear::before { content: "↻"; font-size: 16px; }
+      #btn-project-scale::before { content: "▤"; font-size: 15px; }
 
       #sidebar-tabs { display: flex; gap: 2px; padding: 11px 10px 0; border-bottom: 1px solid var(--border); }
       .tab-btn { position: relative; flex: 1; padding: 10px 3px 12px; border: none; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; transition: color .18s ease; }
@@ -129,6 +130,11 @@
       .modal-check-item:hover { background: var(--surface-hover); }
       .modal-check-item input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
       .modal-info { margin-bottom: 12px; color: #8fa4b6; font-size: 12px; }
+      .project-scale-modal { width: 760px; }
+      .project-scale-table { width: 100%; border-collapse: collapse; color: #dbe7ef; font-size: 13px; }
+      .project-scale-table th, .project-scale-table td { padding: 11px 13px; border: 1px solid var(--border-strong); text-align: left; vertical-align: top; }
+      .project-scale-table th { color: #c9f5ef; background: rgba(36, 198, 183, .1); font-weight: 650; }
+      .project-scale-table td:first-child { width: 46%; color: #a9c0d0; }
       @media (max-width: 900px) { #sidebar { width: 270px; } #props-drawer { flex-basis: 290px; width: 290px; } #btn-toggle-props { right: 303px; } }
     </style>
   </head>
@@ -145,6 +151,7 @@
           <button id="btn-load-local" class="btn btn-secondary">打开 IFC / STL / SVC 文件</button>
           <input id="file-input" class="hidden-input" type="file" accept=".ifc,.stl,.svc" multiple />
           <button id="btn-clear" class="btn btn-secondary">清空场景</button>
+          <button id="btn-project-scale" class="btn btn-secondary">工程规模信息</button>
         </div>
         <div id="sidebar-tabs">
           <button class="tab-btn active" data-tab="tab-models">模型</button>
@@ -205,6 +212,17 @@
           </div>
           <button id="modal-load" class="btn btn-small btn-success">加载选中</button>
         </div>
+      </div>
+    </div>
+
+    <!-- 变电站工程规模信息 -->
+    <div id="project-scale-modal" class="modal-overlay">
+      <div class="modal project-scale-modal">
+        <div class="modal-header">
+          <h3>变电站工程规模信息</h3>
+          <button id="project-scale-close" class="modal-close" title="关闭">✕</button>
+        </div>
+        <div id="project-scale-body" class="modal-body"></div>
       </div>
     </div>
 

@@ -6,6 +6,7 @@ import { setupTabs } from '../ui/tabs.js';
 import { setupPropsDrawer, showIfcElementProperties } from '../ui/propsDrawer.js';
 import { addModelToUI, removeModelFromUI } from '../ui/modelList.js';
 import { setupIfcSelectModal } from '../ui/ifcSelectModal.js';
+import { setupProjectScaleModal } from '../ui/projectScaleModal.js';
 import { setupOpenGimService, loadSelectedIfcFiles } from '../services/openGimService.js';
 import { setupOpenIfcService } from '../services/openIfcService.js';
 import { resetHighlight } from '../viewer/highlight.js';
@@ -38,6 +39,7 @@ async function bootstrapAsync(): Promise<void> {
   setupIfcSelectModal({
     onLoadSelected: () => loadSelectedIfcFiles(ctx, state, modelCallbacks),
   });
+  setupProjectScaleModal(state);
   setupSelection(ctx, state, container, (modelId, localId) => {
     showIfcElementProperties(ctx, state, modelId, localId);
   });
