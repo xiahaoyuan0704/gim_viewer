@@ -39,7 +39,7 @@ function createWindow() {
     height: 960,
     minWidth: 1100,
     minHeight: 720,
-    title: 'GIM 桌面阅读器',
+    title: '数字化中心 GIM 解析软件',
     backgroundColor: '#edf4f7',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
