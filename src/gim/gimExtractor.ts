@@ -11,50 +11,56 @@ async function getArchive() {
   return mod.Archive;
 }
 
-/** 在 ArrayBuffer 中搜索 7z 或 ZIP 签名的偏移量 */
+/** GIM 固定长度头部布局（单位：字节）。 */
+const GIM_HEADER_LAYOUT = [
+  ['文件标识', 16], ['文件名称', 256], ['文件编辑者', 64], ['文件编辑单位', 256],
+  ['软件名称', 128], ['创建时间', 16], ['软件主版本号', 8], ['软件次版本号', 8],
+  ['标准主版本号', 8], ['标准次版本号', 8], ['存储域大小', 16],
+] as const;
+const GIM_HEADER_SIZE = GIM_HEADER_LAYOUT.reduce((total, [, size]) => total + size, 0);
+const GIM_SIGNATURES = new Set(['GIMPKGS', 'GIMPKGT', 'GIMPKEC']);
+
+function readHeaderText(bytes: Uint8Array): string {
+  const decode = (encoding: string) => new TextDecoder(encoding, { fatal: false }).decode(bytes)
+    .replace(/\0/g, '').trim();
+  const utf8 = decode('utf-8');
+  // 工程文件常用 UTF-8；对于旧版 GBK 头部，在 UTF-8 产生替换字符时回退。
+  return utf8.includes('�') ? decode('gbk') : utf8;
+}
+
+function getGimSignature(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  return readHeaderText(bytes.slice(0, 16)).slice(0, 7);
+}
+
+/** 在 ArrayBuffer 中搜索 7z 或 ZIP 签名的偏移量。 */
 export function findArchiveOffset(buffer: ArrayBuffer): number {
   const v = new Uint8Array(buffer);
-  if (v.length < 8) return 0;
-  if (String.fromCharCode(...v.slice(0, 7)) !== 'GIMPKGS') return 0;
-  // 搜索 7z 签名
-  for (let i = 7; i < Math.min(v.length, 4096) - 5; i++) {
+  if (v.length < GIM_HEADER_SIZE || !GIM_SIGNATURES.has(getGimSignature(buffer))) return 0;
+  // 固定头部之后即为压缩数据；同时保留签名扫描来兼容有填充的历史文件。
+  for (let i = GIM_HEADER_SIZE; i < Math.min(v.length, 4096) - 5; i++) {
     if (v[i] === 0x37 && v[i + 1] === 0x7a && v[i + 2] === 0xbc && v[i + 3] === 0xaf && v[i + 4] === 0x27 && v[i + 5] === 0x1c) return i;
-  }
-  // 搜索 ZIP 签名
-  for (let i = 7; i < Math.min(v.length, 4096) - 3; i++) {
     if (v[i] === 0x50 && v[i + 1] === 0x4b && v[i + 2] === 0x03 && v[i + 3] === 0x04) return i;
   }
   return 0;
 }
 
-
-/** 读取 GIMPKGS 压缩数据之前的可读文件头信息。 */
-export function parseGimHeader(arrayBuffer: ArrayBuffer, fileName: string): GimHeaderInfo {
+/** 按 GIM 标准的固定字段布局读取 GIM 文件头。 */
+export function parseGimHeader(arrayBuffer: ArrayBuffer, selectedFileName: string): GimHeaderInfo {
   const bytes = new Uint8Array(arrayBuffer);
+  const signature = getGimSignature(arrayBuffer);
+  const hasGimHeader = GIM_SIGNATURES.has(signature);
   const archiveOffset = findArchiveOffset(arrayBuffer);
-  const hasGimHeader = bytes.length >= 7 && String.fromCharCode(...bytes.slice(0, 7)) === 'GIMPKGS';
-  const signature = archiveOffset > 0 ? bytes.slice(archiveOffset, archiveOffset + 6) : new Uint8Array();
-  const archiveFormat = signature[0] === 0x37 && signature[1] === 0x7a ? '7z' : signature[0] === 0x50 && signature[1] === 0x4b ? 'ZIP' : '未知';
-  const prefixEnd = archiveOffset > 0 ? archiveOffset : Math.min(bytes.length, 4096);
-  const rawText = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(7, prefixEnd))
-    .replace(/\0/g, '\n').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]+/g, ' ').trim();
-  const fields: Array<{ key: string; value: string }> = [
-    { key: '文件名称', value: fileName },
-    { key: '文件大小', value: `${(bytes.byteLength / 1024 / 1024).toFixed(2)} MB` },
-    { key: '文件签名', value: hasGimHeader ? 'GIMPKGS' : '未检测到 GIMPKGS 头' },
-    { key: '压缩格式', value: archiveFormat },
-    { key: '压缩数据偏移', value: archiveOffset > 0 ? `${archiveOffset} bytes` : '未定位' },
-  ];
-  for (const line of rawText.split(/\r?\n/)) {
-    const separator = line.indexOf('=');
-    if (separator <= 0) continue;
-    const key = line.slice(0, separator).trim();
-    const value = line.slice(separator + 1).trim();
-    if (key && value && key.length <= 48) fields.push({ key, value });
+  const archiveSignature = archiveOffset > 0 ? bytes.slice(archiveOffset, archiveOffset + 6) : new Uint8Array();
+  const archiveFormat = archiveSignature[0] === 0x37 && archiveSignature[1] === 0x7a ? '7z' : archiveSignature[0] === 0x50 && archiveSignature[1] === 0x4b ? 'ZIP' : '未知';
+  const fields: Array<{ key: string; value: string }> = [];
+  let offset = 0;
+  for (const [key, size] of GIM_HEADER_LAYOUT) {
+    const value = bytes.length >= offset + size ? readHeaderText(bytes.slice(offset, offset + size)) : '';
+    fields.push({ key, value: key === '文件名称' ? value || selectedFileName : value || '—' });
+    offset += size;
   }
-  const readable = rawText.replace(/\s+/g, ' ').trim();
-  if (readable && !fields.slice(5).length) fields.push({ key: '头部信息', value: readable.slice(0, 300) });
-  return { fileName, fileSize: bytes.byteLength, hasGimHeader, archiveOffset, archiveFormat, fields };
+  return { fileName: selectedFileName, fileSize: bytes.byteLength, hasGimHeader, archiveOffset, archiveFormat, fields };
 }
 
 /** 将 libarchive.js 解压结果展平为 Map<path, File> */
