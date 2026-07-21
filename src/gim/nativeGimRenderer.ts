@@ -740,6 +740,45 @@ async function pickRootDevFiles(files: Map<string, File>, devFiles: string[]): P
 }
 
 
+function getMaterialKey(material: THREE.Material): string {
+  const mat = material as THREE.MeshStandardMaterial;
+  return [material.type, mat.color?.getHexString() || 'none', mat.opacity ?? 1, mat.transparent ? 1 : 0, mat.side].join('|');
+}
+
+/** 合并同一 CBM 节点的非层级网格，保留 cbmPath 供设备拾取和属性查询。 */
+function optimizeCbmGroup(group: THREE.Object3D): void {
+  for (const child of group.children) if (child.userData.cbmPath) optimizeCbmGroup(child);
+  group.updateMatrixWorld(true);
+  const inverse = group.matrixWorld.clone().invert();
+  const buckets = new Map<string, { material: THREE.Material; geometries: THREE.BufferGeometry[] }>();
+  const disposable: THREE.BufferGeometry[] = [];
+  for (const child of [...group.children]) {
+    if (child.userData.cbmPath) continue;
+    child.traverse((object) => {
+      if (!(object instanceof THREE.Mesh) || !(object.geometry instanceof THREE.BufferGeometry)) return;
+      const material = Array.isArray(object.material) ? object.material[0] : object.material;
+      const key = getMaterialKey(material);
+      if (!buckets.has(key)) buckets.set(key, { material, geometries: [] });
+      const geometry = object.geometry.clone();
+      geometry.applyMatrix4(inverse.clone().multiply(object.matrixWorld));
+      buckets.get(key)!.geometries.push(geometry);
+      disposable.push(object.geometry);
+    });
+    group.remove(child);
+  }
+  for (const geometry of disposable) geometry.dispose();
+  for (const { material, geometries } of buckets.values()) {
+    const merged = mergeBufferGeometries(geometries);
+    for (const geometry of geometries) geometry.dispose();
+    if (!merged) continue;
+    merged.computeBoundingBox(); merged.computeBoundingSphere();
+    const mesh = new THREE.Mesh(merged, material);
+    mesh.name = 'GIM_NATIVE_CBM_MERGED';
+    mesh.frustumCulled = false;
+    group.add(mesh);
+  }
+}
+
 function isLikelySitePlane(box: THREE.Box3): boolean {
   const size = box.getSize(new THREE.Vector3());
   const horizontal = Math.max(size.x, size.y);
@@ -1003,7 +1042,8 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
     // 完整工程没有指定 CBM 子集时，退回到 IFC 场景整体包围盒对齐，避免原生一次设备整体飘离站区。
     if (!alignedToIfc) alignedToIfc = await alignNativeRootToLoadedIfc(ctx, state, root, options.cbmFiles);
   }
-  // 保留 CBM/DEV/PHM 对象层级及 cbmPath，供电气设备点击后定位并展示 FAM 属性。
+  // 合并每个 CBM 节点内的几何以降低 draw call，同时保留 CBM 层级和 cbmPath。
+  optimizeCbmGroup(root);
   applyNativeRuntimeHints(root);
   ((ctx.world.scene as any).three as THREE.Scene).add(root);
   state.loadedMeshModels.set(NATIVE_MODEL_ID, { modelId: NATIVE_MODEL_ID, root, visible: true });
