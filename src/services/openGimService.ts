@@ -79,9 +79,8 @@ export async function loadSelectedIfcFiles(ctx: ViewerContext, state: AppState, 
         showLoading('正在叠加 GIM 原生设备细节...');
         ctx.fragments.core.update(true);
         await waitForViewerFrame();
-        // 加载完整 CBM 设备树（而不仅是 FileDevRelation 中出现的设备），确保一次设备和电缆均可选择。
-        // 通过 CBM/IFC GUID 对齐原生设备，避免对全局坐标电缆重复施加 IFC 坐标变换。
-        const nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles, { alignToIfc: true, coordinateWithIfc: false });
+        // 原生 GIM 与 IFC 使用同一基准坐标矩阵；不要以包围盒重新对齐，否则整个电气设备组会偏离站区。
+        const nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles, { alignToIfc: false, coordinateWithIfc: true });
         if (nativeResult) {
           ctx.fragments.core.update(true);
           await waitForViewerFrame();
