@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import type { CbmNode } from '../gim/types.js';
 import type { AppState } from '../app/state.js';
 import type { ViewerContext } from '../viewer/viewerEngine.js';
@@ -5,6 +6,30 @@ import { cbmTreePanel } from './dom.js';
 import { getNodeDisplayName } from '../gim/gimIndexer.js';
 import { showNodeProperties, openPropsDrawer } from './propsDrawer.js';
 import { highlightIfcFromNode } from '../viewer/highlight.js';
+
+function getHierarchyLabel(node: CbmNode, state: AppState): string {
+  const display = getNodeDisplayName(node, state.ifcGuidToName);
+  if (node.path.toLowerCase().endsWith('project.cbm')) return `工程：${display === 'project.cbm' ? '未命名工程' : display}`;
+  const prefix = node.entityName || '部件';
+  const suffix = display && display !== prefix ? `_${display}` : '';
+  const count = node.children.length > 0 ? ` (${node.children.length})` : '';
+  return `${prefix}${suffix}${count}`;
+}
+
+function findNativeNodeGroup(ctx: ViewerContext, node: CbmNode): THREE.Object3D | null {
+  const root = ((ctx.world.scene as any).three as THREE.Scene).getObjectByName('GIM_NATIVE_ROOT');
+  if (!root) return null;
+  let found: THREE.Object3D | null = null;
+  root.traverse((object) => { if (object.userData.cbmPath === node.path) found = object; });
+  return found;
+}
+
+function setNativeNodeVisibility(ctx: ViewerContext, node: CbmNode, visible: boolean): boolean {
+  const group = findNativeNodeGroup(ctx, node);
+  if (!group) return false;
+  group.visible = visible;
+  return true;
+}
 
 const ENTITY_ICONS: Record<string, string> = {
   F1System: '🏗️', F2System: '🏢', F3System: '⚡', F4System: '🔧', PARTINDEX: '🔩',
@@ -30,9 +55,15 @@ export function renderCbmTree(
   icon.textContent = ENTITY_ICONS[node.entityName] || '📁';
   const label = document.createElement('span');
   label.className = 'tree-label';
-  label.textContent = getNodeDisplayName(node, state.ifcGuidToName);
+  label.textContent = getHierarchyLabel(node, state);
   label.title = node.path;
-  row.appendChild(toggle); row.appendChild(icon); row.appendChild(label);
+  const visibility = document.createElement('input');
+  visibility.type = 'checkbox'; visibility.className = 'tree-model-checkbox'; visibility.title = '显示/隐藏此层级模型';
+  const nativeGroup = findNativeNodeGroup(ctx, node);
+  visibility.checked = nativeGroup?.visible ?? true; visibility.disabled = !nativeGroup;
+  visibility.addEventListener('click', (event) => event.stopPropagation());
+  visibility.addEventListener('change', () => { setNativeNodeVisibility(ctx, node, visibility.checked); });
+  row.appendChild(toggle); row.appendChild(visibility); row.appendChild(icon); row.appendChild(label);
   nodeEl.appendChild(row);
   const childrenEl = document.createElement('div');
   childrenEl.className = 'tree-children';
