@@ -17,7 +17,6 @@ const GIM_HEADER_LAYOUT = [
   ['软件名称', 128], ['创建时间', 16], ['软件主版本号', 8], ['软件次版本号', 8],
   ['标准主版本号', 8], ['标准次版本号', 8], ['存储域大小', 16],
 ] as const;
-const GIM_HEADER_SIZE = GIM_HEADER_LAYOUT.reduce((total, [, size]) => total + size, 0);
 const GIM_SIGNATURES = new Set(['GIMPKGS', 'GIMPKGT', 'GIMPKEC']);
 
 function readHeaderText(bytes: Uint8Array): string {
@@ -36,9 +35,11 @@ function getGimSignature(buffer: ArrayBuffer): string {
 /** 在 ArrayBuffer 中搜索 7z 或 ZIP 签名的偏移量。 */
 export function findArchiveOffset(buffer: ArrayBuffer): number {
   const v = new Uint8Array(buffer);
-  if (v.length < GIM_HEADER_SIZE || !GIM_SIGNATURES.has(getGimSignature(buffer))) return 0;
-  // 固定头部之后即为压缩数据；同时保留签名扫描来兼容有填充的历史文件。
-  for (let i = GIM_HEADER_SIZE; i < Math.min(v.length, 4096) - 5; i++) {
+  if (v.length < 8 || !GIM_SIGNATURES.has(getGimSignature(buffer))) return 0;
+  // 标准文件的压缩数据紧随 784 字节固定头部；历史 GIM 文件则存在短头部或额外填充。
+  // 因此从文件标识之后开始查找，保证旧版已能解析的工程包不会因头部显示功能失效。
+  const limit = Math.min(v.length, 64 * 1024);
+  for (let i = 7; i < limit - 5; i++) {
     if (v[i] === 0x37 && v[i + 1] === 0x7a && v[i + 2] === 0xbc && v[i + 3] === 0xaf && v[i + 4] === 0x27 && v[i + 5] === 0x1c) return i;
     if (v[i] === 0x50 && v[i + 1] === 0x4b && v[i + 2] === 0x03 && v[i + 3] === 0x04) return i;
   }
