@@ -26,16 +26,6 @@ function waitForViewerFrame(): Promise<void> {
 }
 
 
-function getNativeOverlayCbmFiles(state: AppState, selected: IfcEntry[]): Set<string> | undefined {
-  const selectedModelIds = new Set(selected.map((entry) => entry.modelId));
-  const cbmFiles = new Set<string>();
-  for (const relation of state.fileDevRelations) {
-    if (!selectedModelIds.has(relation.modelId)) continue;
-    for (const cbm of relation.deviceCbms) cbmFiles.add(cbm);
-  }
-  return cbmFiles.size > 0 ? cbmFiles : undefined;
-}
-
 /** GIM 文件解压后的处理流程 */
 export async function onGimExtracted(ctx: ViewerContext, state: AppState, files: Map<string, File>, showMessage: (text: string) => void): Promise<IfcEntry[]> {
   state.currentFiles = files;
@@ -89,10 +79,9 @@ export async function loadSelectedIfcFiles(ctx: ViewerContext, state: AppState, 
         showLoading('正在叠加 GIM 原生设备细节...');
         ctx.fragments.core.update(true);
         await waitForViewerFrame();
-        const overlayCbmFiles = getNativeOverlayCbmFiles(state, selected);
-        // IFC 加载时会记录 Fragments 的 baseCoordinationMatrix；
-        // 原生 CBM/DEV/PHM 叠加时应用同一基准矩阵，避免仍停留在另一套工程坐标而偏到站区外。
-        const nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles, { cbmFiles: overlayCbmFiles, alignToIfc: false, coordinateWithIfc: true });
+        // 加载完整 CBM 设备树（而不仅是 FileDevRelation 中出现的设备），确保一次设备和电缆均可选择。
+        // 通过 CBM/IFC GUID 对齐原生设备，避免对全局坐标电缆重复施加 IFC 坐标变换。
+        const nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles, { alignToIfc: true, coordinateWithIfc: false });
         if (nativeResult) {
           ctx.fragments.core.update(true);
           await waitForViewerFrame();

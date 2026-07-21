@@ -5,8 +5,10 @@ import type { AppState } from '../app/state.js';
 import type { CbmNode } from './types.js';
 import { parseKeyValue } from './cbmParser.js';
 import { fitCameraToScene } from '../viewer/camera.js';
+import { addModelToUI } from '../ui/modelList.js';
 
 const ROOT_NAME = 'GIM_NATIVE_ROOT';
+const NATIVE_MODEL_ID = 'GIM 原生电气设备';
 const UNIT_SCALE = 0.001; // GIM MOD/PHM/DEV 坐标通常为 mm，Three 场景中按 m 显示。
 
 interface NativeStats {
@@ -552,7 +554,8 @@ async function renderMod(ctx: RenderContext, path: string, parent: THREE.Object3
     const material = makeMaterial(parseColor(colorEl, inheritedColor), parseOpacity(colorEl));
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = `${path}#${id}`;
-    mesh.applyMatrix4(parseMatrix(entity.querySelector('TransformMatrix')?.getAttribute('Value') || ''));
+    // Wire 的端点坐标由导出器以工程绝对坐标写入；再应用实体矩阵会导致线缆整体二次偏移。
+    if (!entity.querySelector('Wire')) mesh.applyMatrix4(parseMatrix(entity.querySelector('TransformMatrix')?.getAttribute('Value') || ''));
     meshByEntityId.set(id, mesh);
     if (!visible) continue;
     parent.add(mesh);
@@ -736,46 +739,6 @@ async function pickRootDevFiles(files: Map<string, File>, devFiles: string[]): P
   return roots.length > 0 ? roots : devFiles;
 }
 
-
-function getMaterialKey(material: THREE.Material): string {
-  const mat = material as THREE.MeshStandardMaterial;
-  const color = mat.color ? mat.color.getHexString() : 'none';
-  return [material.type, color, mat.opacity ?? 1, mat.transparent ? 1 : 0, mat.side].join('|');
-}
-
-function optimizeNativeRoot(root: THREE.Group): void {
-  root.updateMatrixWorld(true);
-  const inverseRoot = root.matrixWorld.clone().invert();
-  const buckets = new Map<string, { material: THREE.Material; geometries: THREE.BufferGeometry[] }>();
-  const originals: THREE.Mesh[] = [];
-
-  root.traverse((obj) => {
-    if (!(obj instanceof THREE.Mesh) || !(obj.geometry instanceof THREE.BufferGeometry)) return;
-    originals.push(obj);
-    const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
-    const material = materials[0];
-    const key = getMaterialKey(material);
-    if (!buckets.has(key)) buckets.set(key, { material, geometries: [] });
-    const geometry = obj.geometry.clone();
-    geometry.applyMatrix4(inverseRoot.clone().multiply(obj.matrixWorld));
-    buckets.get(key)!.geometries.push(geometry);
-  });
-
-  if (originals.length < 2) return;
-  root.clear();
-  for (const mesh of originals) mesh.geometry.dispose();
-  for (const { material, geometries } of buckets.values()) {
-    const merged = mergeBufferGeometries(geometries);
-    for (const geometry of geometries) geometry.dispose();
-    if (!merged) continue;
-    merged.computeBoundingBox();
-    merged.computeBoundingSphere();
-    const mesh = new THREE.Mesh(merged, material);
-    mesh.name = 'GIM_NATIVE_MERGED';
-    mesh.frustumCulled = false;
-    root.add(mesh);
-  }
-}
 
 function isLikelySitePlane(box: THREE.Box3): boolean {
   const size = box.getSize(new THREE.Vector3());
@@ -974,6 +937,7 @@ export function removePreviousNativeRoot(ctx: ViewerContext): void {
   const previous = scene.getObjectByName(ROOT_NAME);
   if (!previous) return;
   previous.removeFromParent();
+  document.getElementById(`model-${NATIVE_MODEL_ID}`)?.remove();
   previous.traverse((obj) => {
     if (obj instanceof THREE.Mesh) {
       obj.geometry.dispose();
@@ -1033,10 +997,17 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
 
   if (renderCtx.stats.meshCount === 0) return null;
   const coordinatedToIfc = options.coordinateWithIfc ? applyIfcBaseCoordinateTransform(ctx, root) : false;
-  const alignedToIfc = !coordinatedToIfc && options.alignToIfc !== false ? await alignNativeCbmGroupsToIfc(ctx, root, options.cbmFiles) : coordinatedToIfc;
-  optimizeNativeRoot(root);
+  let alignedToIfc = coordinatedToIfc;
+  if (!coordinatedToIfc && options.alignToIfc !== false) {
+    alignedToIfc = await alignNativeCbmGroupsToIfc(ctx, root, options.cbmFiles);
+    // 完整工程没有指定 CBM 子集时，退回到 IFC 场景整体包围盒对齐，避免原生一次设备整体飘离站区。
+    if (!alignedToIfc) alignedToIfc = await alignNativeRootToLoadedIfc(ctx, state, root, options.cbmFiles);
+  }
+  // 保留 CBM/DEV/PHM 对象层级及 cbmPath，供电气设备点击后定位并展示 FAM 属性。
   applyNativeRuntimeHints(root);
   ((ctx.world.scene as any).three as THREE.Scene).add(root);
+  state.loadedMeshModels.set(NATIVE_MODEL_ID, { modelId: NATIVE_MODEL_ID, root, visible: true });
+  addModelToUI(ctx, state, NATIVE_MODEL_ID);
   state.hasFittedCamera = false;
   fitCameraToScene(ctx, state);
   return { group: root, alignedToIfc, ...renderCtx.stats };

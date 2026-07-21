@@ -2,9 +2,11 @@ import * as OBC from '@thatopen/components';
 import * as THREE from 'three';
 import type { ViewerContext } from './viewerEngine.js';
 import type { AppState } from '../app/state.js';
+import type { CbmNode } from '../gim/types.js';
 import { resetHighlight, HIGHLIGHT_STYLE } from './highlight.js';
 
 export type OnElementSelected = (modelId: string, localId: number) => void;
+export type OnNativeNodeSelected = (node: CbmNode) => void;
 
 /** 注册 3D canvas 点击拾取 */
 export function setupSelection(
@@ -12,9 +14,10 @@ export function setupSelection(
   state: AppState,
   container: HTMLElement,
   onElementSelected: OnElementSelected,
+  onNativeNodeSelected: OnNativeNodeSelected,
 ): void {
   container.addEventListener('click', async (e: MouseEvent) => {
-    if (!state.initialized || ctx.fragments.list.size === 0) return;
+    if (!state.initialized) return;
     const canvas = container.querySelector('canvas');
     if (e.target !== container && e.target !== canvas) return;
 
@@ -29,6 +32,21 @@ export function setupSelection(
 
       if (!result) {
         await resetHighlight(ctx, state);
+        const canvas = container.querySelector('canvas') as HTMLCanvasElement | null;
+        const rect = (canvas || container).getBoundingClientRect();
+        const pointer = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(pointer, (ctx.world.camera as any).three);
+        const intersections = raycaster.intersectObjects(((ctx.world.scene as any).three as THREE.Scene).children, true);
+        for (const hit of intersections) {
+          let owner: THREE.Object3D | null = hit.object;
+          while (owner && !owner.userData.cbmPath) owner = owner.parent;
+          if (!owner) continue;
+          const fileName = String(owner.userData.cbmPath).split('/').pop() || '';
+          const node = state.cbmNodeIndex.get(fileName);
+          if (node) onNativeNodeSelected(node);
+          return;
+        }
         return;
       }
 

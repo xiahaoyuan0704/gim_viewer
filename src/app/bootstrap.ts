@@ -3,7 +3,7 @@ import { createViewerEngine } from '../viewer/viewerEngine.js';
 import { ensureEngineReady } from '../viewer/ifcLoader.js';
 import { setupSelection } from '../viewer/selection.js';
 import { setupTabs } from '../ui/tabs.js';
-import { setupPropsDrawer, showIfcElementProperties } from '../ui/propsDrawer.js';
+import { setupPropsDrawer, showIfcElementProperties, showNodeProperties, openPropsDrawer } from '../ui/propsDrawer.js';
 import { addModelToUI, removeModelFromUI } from '../ui/modelList.js';
 import { setupIfcSelectModal } from '../ui/ifcSelectModal.js';
 import { setupProjectScaleModal } from '../ui/projectScaleModal.js';
@@ -42,6 +42,9 @@ async function bootstrapAsync(): Promise<void> {
   setupProjectScaleModal(state);
   setupSelection(ctx, state, container, (modelId, localId) => {
     showIfcElementProperties(ctx, state, modelId, localId);
+  }, (node) => {
+    void showNodeProperties(ctx, state, node);
+    openPropsDrawer(ctx);
   });
   setupOpenGimService(ctx, state, (text) => showLoading(text));
   setupOpenIfcService(ctx, state, modelCallbacks);
