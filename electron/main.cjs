@@ -40,7 +40,7 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 720,
     title: '数字化中心 GIM 解析软件',
-    backgroundColor: '#edf4f7',
+    backgroundColor: '#e6e6e6',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
