@@ -8,6 +8,23 @@ import { resetHighlight, HIGHLIGHT_STYLE } from './highlight.js';
 export type OnElementSelected = (modelId: string, localId: number) => void;
 export type OnNativeNodeSelected = (node: CbmNode) => void;
 
+const NATIVE_SELECTION_NAME = 'GIM_NATIVE_SELECTION';
+
+function clearNativeOutline(ctx: ViewerContext): void {
+  const scene = (ctx.world.scene as any).three as THREE.Scene;
+  scene.getObjectByName(NATIVE_SELECTION_NAME)?.removeFromParent();
+}
+
+function showNativeOutline(ctx: ViewerContext, object: THREE.Object3D): void {
+  clearNativeOutline(ctx);
+  const outline = new THREE.BoxHelper(object, 0xffffff);
+  outline.name = NATIVE_SELECTION_NAME;
+  outline.material.depthTest = false;
+  outline.material.transparent = true;
+  outline.material.opacity = 0.95;
+  ((ctx.world.scene as any).three as THREE.Scene).add(outline);
+}
+
 function selectNativeNode(
   ctx: ViewerContext,
   state: AppState,
@@ -29,6 +46,7 @@ function selectNativeNode(
     const fileName = String(owner.userData.cbmPath).split('/').pop() || '';
     const node = state.cbmNodeIndex.get(fileName);
     if (!node) continue;
+    showNativeOutline(ctx, owner);
     onNativeNodeSelected(node);
     window.dispatchEvent(new CustomEvent('gim-selection', { detail: { node } }));
     return true;
@@ -60,10 +78,12 @@ export function setupSelection(
       });
 
       if (!result) {
+        clearNativeOutline(ctx);
         await resetHighlight(ctx, state);
         return;
       }
 
+      clearNativeOutline(ctx);
       const { localId, fragments: hitModel } = result;
       const modelId = hitModel.modelId;
 

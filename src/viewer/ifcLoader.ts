@@ -43,7 +43,8 @@ export function registerModelEvents(
   });
   ctx.fragments.core.models.materials.list.onItemSet.add(({ value: material }) => {
     if (!('isLodMaterial' in material && material.isLodMaterial)) {
-      material.polygonOffset = true; material.polygonOffsetUnits = 1; material.polygonOffsetFactor = Math.random();
+      // 随机 polygon offset 会在相机移动时造成同一建筑表面的闪烁/反光样伪影。
+      material.polygonOffset = false;
     }
   });
 }
