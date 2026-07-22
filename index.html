@@ -48,6 +48,7 @@
       #btn-load-local::before { content: "⌑"; font-size: 17px; }
       #btn-clear::before { content: "↻"; font-size: 16px; }
       #btn-project-scale::before { content: "▤"; font-size: 15px; }
+      #btn-toggle-grid::before { content: "▦"; font-size: 15px; }
 
       #sidebar-tabs { display: flex; gap: 2px; padding: 11px 10px 0; border-bottom: 1px solid var(--border); }
       .tab-btn { position: relative; flex: 1; padding: 10px 3px 12px; border: none; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; transition: color .18s ease; }
@@ -135,6 +136,10 @@
       .project-scale-table th, .project-scale-table td { padding: 11px 13px; border: 1px solid var(--border-strong); text-align: left; vertical-align: top; }
       .project-scale-table th { color: #fff; background: rgba(255, 255, 255, .09); font-weight: 650; }
       .project-scale-table td:first-child { width: 46%; color: #bbb; }
+      #selection-menu { position: fixed; z-index: 10000; display: none; min-width: 136px; padding: 5px; border: 1px solid #444; border-radius: 8px; background: #171717; box-shadow: 0 12px 30px rgba(0,0,0,.42); }
+      #selection-menu.open { display: grid; gap: 2px; }
+      .selection-menu-item { padding: 8px 10px; border: 0; border-radius: 5px; background: transparent; color: #eee; text-align: left; cursor: pointer; font-size: 12px; }
+      .selection-menu-item:hover { background: #333; }
       @media (max-width: 900px) { #sidebar { width: 270px; } #props-drawer { flex-basis: 290px; width: 290px; } #btn-toggle-props { right: 303px; } }
     </style>
   </head>
@@ -152,6 +157,7 @@
           <input id="file-input" class="hidden-input" type="file" accept=".ifc,.stl,.svc" multiple />
           <button id="btn-clear" class="btn btn-secondary">清空场景</button>
           <button id="btn-project-scale" class="btn btn-secondary">工程规模信息</button>
+          <button id="btn-toggle-grid" class="btn btn-secondary">隐藏网格线</button>
         </div>
         <div id="sidebar-tabs">
           <button class="tab-btn active" data-tab="tab-models">模型</button>
@@ -224,6 +230,12 @@
         </div>
         <div id="project-scale-body" class="modal-body"></div>
       </div>
+    </div>
+
+    <div id="selection-menu">
+      <button class="selection-menu-item" data-action="isolate">隔离</button>
+      <button class="selection-menu-item" data-action="hide">隐藏</button>
+      <button class="selection-menu-item" data-action="show-all">显示全部</button>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

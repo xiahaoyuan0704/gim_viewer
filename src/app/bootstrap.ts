@@ -7,6 +7,7 @@ import { setupPropsDrawer, showIfcElementProperties, showNodeProperties, openPro
 import { addModelToUI, removeModelFromUI } from '../ui/modelList.js';
 import { setupIfcSelectModal } from '../ui/ifcSelectModal.js';
 import { setupProjectScaleModal } from '../ui/projectScaleModal.js';
+import { setupViewportActions } from '../ui/viewportActions.js';
 import { setupOpenGimService, loadSelectedIfcFiles } from '../services/openGimService.js';
 import { setupOpenIfcService } from '../services/openIfcService.js';
 import { resetHighlight } from '../viewer/highlight.js';
@@ -40,6 +41,7 @@ async function bootstrapAsync(): Promise<void> {
     onLoadSelected: () => loadSelectedIfcFiles(ctx, state, modelCallbacks),
   });
   setupProjectScaleModal(state);
+  setupViewportActions(ctx, state);
   setupSelection(ctx, state, container, (modelId, localId) => {
     showIfcElementProperties(ctx, state, modelId, localId);
   }, (node) => {

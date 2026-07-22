@@ -30,6 +30,7 @@ function selectNativeNode(
     const node = state.cbmNodeIndex.get(fileName);
     if (!node) continue;
     onNativeNodeSelected(node);
+    window.dispatchEvent(new CustomEvent('gim-selection', { detail: { node } }));
     return true;
   }
   return false;
@@ -74,6 +75,7 @@ export function setupSelection(
 
       // 通知外部
       onElementSelected(modelId, localId);
+      window.dispatchEvent(new CustomEvent('gim-selection', { detail: { modelId } }));
     } catch (err) {
       console.warn('射线拾取失败:', err);
     }
