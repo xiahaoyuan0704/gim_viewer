@@ -8,21 +8,32 @@ import { resetHighlight, HIGHLIGHT_STYLE } from './highlight.js';
 export type OnElementSelected = (modelId: string, localId: number) => void;
 export type OnNativeNodeSelected = (node: CbmNode) => void;
 
-const NATIVE_SELECTION_NAME = 'GIM_NATIVE_SELECTION';
+const nativeHighlightedMeshes: Array<{ mesh: THREE.Mesh; material: THREE.Material | THREE.Material[]; highlighted: THREE.Material[] }> = [];
 
-function clearNativeOutline(ctx: ViewerContext): void {
-  const scene = (ctx.world.scene as any).three as THREE.Scene;
-  scene.getObjectByName(NATIVE_SELECTION_NAME)?.removeFromParent();
+function clearNativeHighlight(): void {
+  for (const { mesh, material, highlighted } of nativeHighlightedMeshes) {
+    mesh.material = material;
+    for (const highlightMaterial of highlighted) highlightMaterial.dispose();
+  }
+  nativeHighlightedMeshes.length = 0;
 }
 
-function showNativeOutline(ctx: ViewerContext, object: THREE.Object3D): void {
-  clearNativeOutline(ctx);
-  const outline = new THREE.BoxHelper(object, 0xffffff);
-  outline.name = NATIVE_SELECTION_NAME;
-  outline.material.depthTest = false;
-  outline.material.transparent = true;
-  outline.material.opacity = 0.95;
-  ((ctx.world.scene as any).three as THREE.Scene).add(outline);
+function showNativeHighlight(object: THREE.Object3D): void {
+  clearNativeHighlight();
+  object.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+    const original = child.material;
+    const originals = Array.isArray(original) ? original : [original];
+    const highlighted = originals.map((material) => {
+      const clone = material.clone() as THREE.MeshStandardMaterial;
+      if (clone.color) clone.color.set(0xffffff);
+      if (clone.emissive) { clone.emissive.set(0xffffff); clone.emissiveIntensity = 0.35; }
+      clone.polygonOffset = true; clone.polygonOffsetFactor = -1; clone.polygonOffsetUnits = -1;
+      return clone;
+    });
+    child.material = Array.isArray(original) ? highlighted : highlighted[0];
+    nativeHighlightedMeshes.push({ mesh: child, material: original, highlighted });
+  });
 }
 
 function selectNativeNode(
@@ -46,7 +57,7 @@ function selectNativeNode(
     const fileName = String(owner.userData.cbmPath).split('/').pop() || '';
     const node = state.cbmNodeIndex.get(fileName);
     if (!node) continue;
-    showNativeOutline(ctx, owner);
+    showNativeHighlight(owner);
     onNativeNodeSelected(node);
     window.dispatchEvent(new CustomEvent('gim-selection', { detail: { node } }));
     return true;
@@ -78,12 +89,12 @@ export function setupSelection(
       });
 
       if (!result) {
-        clearNativeOutline(ctx);
+        clearNativeHighlight();
         await resetHighlight(ctx, state);
         return;
       }
 
-      clearNativeOutline(ctx);
+      clearNativeHighlight();
       const { localId, fragments: hitModel } = result;
       const modelId = hitModel.modelId;
 

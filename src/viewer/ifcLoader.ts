@@ -43,8 +43,10 @@ export function registerModelEvents(
   });
   ctx.fragments.core.models.materials.list.onItemSet.add(({ value: material }) => {
     if (!('isLodMaterial' in material && material.isLodMaterial)) {
-      // 随机 polygon offset 会在相机移动时造成同一建筑表面的闪烁/反光样伪影。
-      material.polygonOffset = false;
+      // 使用固定 offset 分离重叠表面；随机 offset 会造成相机移动时的条纹伪影。
+      material.polygonOffset = true;
+      material.polygonOffsetFactor = 1;
+      material.polygonOffsetUnits = 1;
     }
   });
 }
