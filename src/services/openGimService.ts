@@ -38,6 +38,11 @@ function getNativeOverlayCbmFiles(state: AppState, selected: IfcEntry[]): Set<st
     if (!relationRefs.some((ref) => selectedModelIds.has(ref))) continue;
     for (const cbm of relation.deviceCbms) cbmFiles.add(cbm);
   }
+  if (cbmFiles.size > 0) return cbmFiles;
+  // 少数 GIM 没有 FileDevRelation，或其 IFC 名称与包内文件不一致；回退到所有带 DEV 指针的设备节点，确保电气设备仍能叠加。
+  for (const node of state.cbmNodeIndex.values()) {
+    if (node.devPath) cbmFiles.add(node.path.split('/').pop() || node.path);
+  }
   return cbmFiles.size > 0 ? cbmFiles : undefined;
 }
 
@@ -103,7 +108,7 @@ export async function loadSelectedIfcFiles(ctx: ViewerContext, state: AppState, 
             await waitForViewerFrame();
           }
         } else {
-          console.warn('未找到已选 IFC 的 FileDevRelation，跳过全量原生设备叠加以保护渲染性能。');
+          console.warn('未发现可渲染的 DEV 设备引用。');
         }
       } catch (nativeErr) {
         console.warn('GIM 原生细节渲染失败，继续显示 IFC:', nativeErr);
