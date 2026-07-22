@@ -56,5 +56,12 @@ function applyAction(ctx: ViewerContext, state: AppState, target: Target, action
   const chosen = nativeGroup(ctx, target.node);
   if (!chosen) return;
   if (action === 'hide') { chosen.visible = false; return; }
-  nativeRoot?.traverse((object: THREE.Object3D) => { if (object.userData.cbmPath) object.visible = object === chosen; });
+  // 隔离原生设备时，隐藏所有 IFC 模型和其他 CBM 设备，仅保留当前设备及其部件层级。
+  for (const model of models) model!.object.visible = false;
+  nativeRoot?.traverse((object: THREE.Object3D) => {
+    if (!object.userData.cbmPath) return;
+    let withinChosen = object === chosen;
+    for (let parent = object.parent; !withinChosen && parent; parent = parent.parent) withinChosen = parent === chosen;
+    object.visible = withinChosen;
+  });
 }

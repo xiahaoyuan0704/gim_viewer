@@ -48,7 +48,7 @@
       #btn-load-local::before { content: "⌑"; font-size: 17px; }
       #btn-clear::before { content: "↻"; font-size: 16px; }
       #btn-project-scale::before { content: "▤"; font-size: 15px; }
-      #btn-toggle-grid::before { content: "▦"; font-size: 15px; }
+      #btn-toggle-grid::before { content: "▦"; font-size: 14px; }
 
       #sidebar-tabs { display: flex; gap: 2px; padding: 11px 10px 0; border-bottom: 1px solid var(--border); }
       .tab-btn { position: relative; flex: 1; padding: 10px 3px 12px; border: none; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; transition: color .18s ease; }
@@ -91,6 +91,8 @@
 
       #center { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; position: relative; background: var(--canvas); }
       #viewport { flex: 1 1 auto; min-width: 0; overflow: hidden; position: relative; }
+      #btn-toggle-grid { position: absolute; top: 16px; left: 16px; z-index: 20; width: auto; min-height: 32px; padding: 6px 10px; border: 1px solid rgba(0,0,0,.18); border-radius: 7px; background: rgba(255,255,255,.9); color: #222; box-shadow: 0 6px 16px rgba(0,0,0,.12); font-size: 11px; font-weight: 600; }
+      #btn-toggle-grid:hover { background: #111; color: #fff; transform: none; }
       #loading { position: absolute; top: 22px; right: 22px; padding: 11px 15px; background: rgba(18, 18, 18, .94); color: #f4f4f4; border: 1px solid rgba(255, 255, 255, .2); border-radius: 9px; font-size: 13px; box-shadow: var(--shadow); backdrop-filter: blur(12px); display: none; z-index: 10; }
       #empty-tip { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #777; pointer-events: none; text-align: center; }
       #empty-tip::before { content: "GIM"; display: grid; place-items: center; width: 72px; height: 72px; margin-bottom: 19px; border: 1px solid rgba(0, 0, 0, .12); border-radius: 23px; background: rgba(255,255,255,.55); color: var(--accent-strong); font-size: 15px; font-weight: 750; letter-spacing: .12em; box-shadow: 0 12px 30px rgba(69, 112, 140, .1); }
@@ -157,7 +159,6 @@
           <input id="file-input" class="hidden-input" type="file" accept=".ifc,.stl,.svc" multiple />
           <button id="btn-clear" class="btn btn-secondary">清空场景</button>
           <button id="btn-project-scale" class="btn btn-secondary">工程规模信息</button>
-          <button id="btn-toggle-grid" class="btn btn-secondary">隐藏网格线</button>
         </div>
         <div id="sidebar-tabs">
           <button class="tab-btn active" data-tab="tab-models">模型</button>
@@ -182,6 +183,7 @@
       <!-- 中间视口 -->
       <div id="center">
         <div id="viewport">
+          <button id="btn-toggle-grid" title="切换网格线">隐藏网格线</button>
           <div id="loading">准备中...</div>
           <div id="empty-tip" aria-hidden="true"></div>
         </div>
