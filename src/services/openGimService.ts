@@ -26,11 +26,16 @@ function waitForViewerFrame(): Promise<void> {
 }
 
 
+function normalizeModelRef(value: string): string {
+  return value.replace(/\\/g, '/').split('/').pop()!.replace(/\.ifc$/i, '').trim().toLocaleLowerCase('zh-CN');
+}
+
 function getNativeOverlayCbmFiles(state: AppState, selected: IfcEntry[]): Set<string> | undefined {
-  const selectedModelIds = new Set(selected.map((entry) => entry.modelId));
+  const selectedModelIds = new Set(selected.flatMap((entry) => [normalizeModelRef(entry.modelId), normalizeModelRef(entry.name), normalizeModelRef(entry.path)]));
   const cbmFiles = new Set<string>();
   for (const relation of state.fileDevRelations) {
-    if (!selectedModelIds.has(relation.modelId)) continue;
+    const relationRefs = [relation.modelId, relation.ifcName, relation.ifcFile].map(normalizeModelRef);
+    if (!relationRefs.some((ref) => selectedModelIds.has(ref))) continue;
     for (const cbm of relation.deviceCbms) cbmFiles.add(cbm);
   }
   return cbmFiles.size > 0 ? cbmFiles : undefined;
