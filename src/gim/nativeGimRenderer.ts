@@ -979,6 +979,26 @@ function applyNativeRuntimeHints(root: THREE.Group): void {
   });
 }
 
+/** 在相机拖拽期间暂时隐藏高密度原生设备，停止操作后恢复，优先保证交互帧率。 */
+function enableNativeInteractionLod(ctx: ViewerContext, state: AppState, root: THREE.Group): void {
+  const controls = (ctx.world.camera as any).controls as { addEventListener?: (name: string, callback: () => void) => void } | undefined;
+  if (!controls?.addEventListener) return;
+  let restoreTimer: ReturnType<typeof setTimeout> | undefined;
+  const hideForInteraction = () => {
+    if (restoreTimer) clearTimeout(restoreTimer);
+    if (state.loadedMeshModels.get(NATIVE_MODEL_ID)?.visible) root.visible = false;
+  };
+  const restoreAfterInteraction = () => {
+    if (restoreTimer) clearTimeout(restoreTimer);
+    restoreTimer = setTimeout(() => {
+      if (state.loadedMeshModels.get(NATIVE_MODEL_ID)?.visible) root.visible = true;
+    }, 100);
+  };
+  controls.addEventListener('controlstart', hideForInteraction);
+  controls.addEventListener('controlend', restoreAfterInteraction);
+  controls.addEventListener('rest', restoreAfterInteraction);
+}
+
 export function removePreviousNativeRoot(ctx: ViewerContext): void {
   const scene = (ctx.world.scene as any).three as THREE.Scene;
   const previous = scene.getObjectByName(ROOT_NAME);
@@ -1056,6 +1076,7 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
   ((ctx.world.scene as any).three as THREE.Scene).add(root);
   state.loadedMeshModels.set(NATIVE_MODEL_ID, { modelId: NATIVE_MODEL_ID, root, visible: true });
   addModelToUI(ctx, state, NATIVE_MODEL_ID);
+  enableNativeInteractionLod(ctx, state, root);
   state.hasFittedCamera = false;
   fitCameraToScene(ctx, state);
   return { group: root, alignedToIfc, ...renderCtx.stats };
