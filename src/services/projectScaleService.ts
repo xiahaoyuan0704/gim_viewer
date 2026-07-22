@@ -38,6 +38,13 @@ async function readSubstationScale(files: Map<string, File>): Promise<ProjectSca
     for (const [key, value] of Object.entries(properties)) if (value && !values.has(normalizeKey(key))) values.set(normalizeKey(key), value);
     const parent = properties.BASEFAMILY;
     if (parent) await collect(findPath(files, parent, path.startsWith('DEV/') ? 'DEV' : 'CBM'));
+    // 工程规模属性通常继承在 project.cbm 指向的 F1System 上，而不直接写在工程入口文件。
+    if (path.startsWith('CBM/')) {
+      const refs = [properties.SUBSYSTEM];
+      const count = Number(properties['SUBSYSTEMS.NUM'] || 0);
+      for (let i = 0; i < Math.min(count, 1); i++) refs.push(properties[`SUBSYSTEM${i}`]);
+      for (const ref of refs) if (ref) await collect(findPath(files, ref, 'CBM'));
+    }
   };
   await collect(files.has('CBM/project.cbm') ? 'CBM/project.cbm' : null);
   // 工程属性文件通常位于 CBM 根目录；只读取名称明确的候选文件，不扫描设备 FAM。
