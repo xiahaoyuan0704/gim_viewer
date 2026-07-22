@@ -971,32 +971,13 @@ export async function alignNativeRootToLoadedIfc(ctx: ViewerContext, state: AppS
 function applyNativeRuntimeHints(root: THREE.Group): void {
   root.traverse((obj) => {
     if (!(obj instanceof THREE.Mesh)) return;
-    obj.frustumCulled = false;
+    // 已计算包围体，启用视锥裁剪可避免相机操作时绘制站区外的大量电气设备。
+    obj.frustumCulled = true;
     if (obj.geometry instanceof THREE.BufferGeometry) {
       obj.geometry.computeBoundingBox();
       obj.geometry.computeBoundingSphere();
     }
   });
-}
-
-/** 在相机拖拽期间暂时隐藏高密度原生设备，停止操作后恢复，优先保证交互帧率。 */
-function enableNativeInteractionLod(ctx: ViewerContext, state: AppState, root: THREE.Group): void {
-  const controls = (ctx.world.camera as any).controls as { addEventListener?: (name: string, callback: () => void) => void } | undefined;
-  if (!controls?.addEventListener) return;
-  let restoreTimer: ReturnType<typeof setTimeout> | undefined;
-  const hideForInteraction = () => {
-    if (restoreTimer) clearTimeout(restoreTimer);
-    if (state.loadedMeshModels.get(NATIVE_MODEL_ID)?.visible) root.visible = false;
-  };
-  const restoreAfterInteraction = () => {
-    if (restoreTimer) clearTimeout(restoreTimer);
-    restoreTimer = setTimeout(() => {
-      if (state.loadedMeshModels.get(NATIVE_MODEL_ID)?.visible) root.visible = true;
-    }, 100);
-  };
-  controls.addEventListener('controlstart', hideForInteraction);
-  controls.addEventListener('controlend', restoreAfterInteraction);
-  controls.addEventListener('rest', restoreAfterInteraction);
 }
 
 export function removePreviousNativeRoot(ctx: ViewerContext): void {
@@ -1076,7 +1057,6 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
   ((ctx.world.scene as any).three as THREE.Scene).add(root);
   state.loadedMeshModels.set(NATIVE_MODEL_ID, { modelId: NATIVE_MODEL_ID, root, visible: true });
   addModelToUI(ctx, state, NATIVE_MODEL_ID);
-  enableNativeInteractionLod(ctx, state, root);
   state.hasFittedCamera = false;
   fitCameraToScene(ctx, state);
   return { group: root, alignedToIfc, ...renderCtx.stats };
