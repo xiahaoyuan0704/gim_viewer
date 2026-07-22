@@ -10,6 +10,7 @@ import { addModelToUI } from '../ui/modelList.js';
 const ROOT_NAME = 'GIM_NATIVE_ROOT';
 const NATIVE_MODEL_ID = 'GIM 原生电气设备';
 const UNIT_SCALE = 0.001; // GIM MOD/PHM/DEV 坐标通常为 mm，Three 场景中按 m 显示。
+const MAX_MERGE_VERTICES = 200_000; // 避免超大设备合并时瞬时复制几何导致 GPU/浏览器上下文丢失。
 
 interface NativeStats {
   cbmCount: number;
@@ -748,6 +749,13 @@ function getMaterialKey(material: THREE.Material): string {
 /** 合并同一 CBM 节点的非层级网格，保留 cbmPath 供设备拾取和属性查询。 */
 function optimizeCbmGroup(group: THREE.Object3D): void {
   for (const child of group.children) if (child.userData.cbmPath) optimizeCbmGroup(child);
+  let vertexCount = 0;
+  for (const child of group.children) {
+    if (child.userData.cbmPath) continue;
+    child.traverse((object) => { if (object instanceof THREE.Mesh) vertexCount += object.geometry.getAttribute('position')?.count || 0; });
+  }
+  // 原始网格已可正确显示时，宁可保留较多 draw call，也不能为合并复制超大几何而触发白屏。
+  if (vertexCount > MAX_MERGE_VERTICES) return;
   group.updateMatrixWorld(true);
   const inverse = group.matrixWorld.clone().invert();
   const buckets = new Map<string, { material: THREE.Material; geometries: THREE.BufferGeometry[] }>();

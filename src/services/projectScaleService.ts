@@ -15,29 +15,39 @@ const STATION_FIELDS: Array<{ label: string; aliases: string[] }> = [
   { label: '中压侧主接线方式(远期/本期)', aliases: ['中压侧主接线方式(远期/本期)', '中压侧主接线方式', 'MEDIUMVOLTAGEWIRING'] },
   { label: '低压侧主接线方式(远期/本期)', aliases: ['低压侧主接线方式(远期/本期)', '低压侧主接线方式', 'LOWVOLTAGEWIRING'] },
 ];
+const scaleCache = new WeakMap<Map<string, File>, Promise<ProjectScaleRow[]>>();
 
-function normalizeKey(key: string): string {
-  return key.toUpperCase().replace(/[\s_\-()（）]/g, '');
+function normalizeKey(key: string): string { return key.toUpperCase().replace(/[\s_\-()（）]/g, ''); }
+function findPath(files: Map<string, File>, ref: string, preferredDir = 'CBM'): string | null {
+  const direct = `${preferredDir}/${ref}`;
+  if (files.has(direct)) return direct;
+  const lower = ref.toLowerCase();
+  for (const path of files.keys()) if (path.toLowerCase().endsWith(`/${lower}`)) return path;
+  return null;
 }
 
-/** 从工程属性相关文本中提取变电站工程规模字段。 */
-export async function getSubstationScale(state: AppState): Promise<ProjectScaleRow[]> {
-  if (!state.currentFiles) return STATION_FIELDS.map(({ label }) => ({ label, value: '—' }));
-  const entries: Array<[string, Record<string, string>]> = [];
-  const preferred = /(?:工程属性|工程信息|project|项目).*(?:\.fam|\.cbm)$/i;
-  for (const [path, file] of state.currentFiles) {
-    if (!/\.(fam|cbm)$/i.test(path)) continue;
-    entries.push([path, parseKeyValue(await file.text())]);
-  }
-  entries.sort(([a], [b]) => Number(preferred.test(b)) - Number(preferred.test(a)) || a.localeCompare(b, 'zh-CN'));
+/** 仅读取工程入口及其 FAM 继承链，避免点击按钮时遍历数千个设备属性文件。 */
+async function readSubstationScale(files: Map<string, File>): Promise<ProjectScaleRow[]> {
   const values = new Map<string, string>();
-  for (const [, properties] of entries) {
-    for (const [key, value] of Object.entries(properties)) {
-      if (value && !values.has(normalizeKey(key))) values.set(normalizeKey(key), value);
-    }
-  }
-  return STATION_FIELDS.map(({ label, aliases }) => ({
-    label,
-    value: aliases.map(normalizeKey).map((key) => values.get(key)).find(Boolean) || '—',
-  }));
+  const visited = new Set<string>();
+  const collect = async (path: string | null): Promise<void> => {
+    if (!path || visited.has(path)) return;
+    visited.add(path);
+    const file = files.get(path); if (!file) return;
+    const properties = parseKeyValue(await file.text());
+    for (const [key, value] of Object.entries(properties)) if (value && !values.has(normalizeKey(key))) values.set(normalizeKey(key), value);
+    const parent = properties.BASEFAMILY;
+    if (parent) await collect(findPath(files, parent, path.startsWith('DEV/') ? 'DEV' : 'CBM'));
+  };
+  await collect(files.has('CBM/project.cbm') ? 'CBM/project.cbm' : null);
+  // 工程属性文件通常位于 CBM 根目录；只读取名称明确的候选文件，不扫描设备 FAM。
+  for (const path of files.keys()) if (/^CBM\/.*(?:工程属性|工程信息|project|项目).*\.fam$/i.test(path)) await collect(path);
+  return STATION_FIELDS.map(({ label, aliases }) => ({ label, value: aliases.map(normalizeKey).map((key) => values.get(key)).find(Boolean) || '—' }));
+}
+
+export function getSubstationScale(state: AppState): Promise<ProjectScaleRow[]> {
+  if (!state.currentFiles) return Promise.resolve(STATION_FIELDS.map(({ label }) => ({ label, value: '—' })));
+  let result = scaleCache.get(state.currentFiles);
+  if (!result) { result = readSubstationScale(state.currentFiles); scaleCache.set(state.currentFiles, result); }
+  return result;
 }

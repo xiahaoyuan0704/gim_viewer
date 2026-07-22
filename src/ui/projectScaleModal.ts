@@ -9,13 +9,13 @@ const button = document.getElementById('btn-project-scale') as HTMLButtonElement
 
 export function setupProjectScaleModal(state: AppState): void {
   button.addEventListener('click', async () => {
-    if (!state.currentFiles) { body.innerHTML = '<div class="props-empty">请先打开 GIM 文件</div>'; }
-    else {
-      body.innerHTML = '<div class="props-empty">正在读取工程属性信息...</div>';
+    modal.classList.add('open');
+    if (!state.currentFiles) { body.innerHTML = '<div class="props-empty">请先打开 GIM 文件</div>'; return; }
+    body.innerHTML = '<div class="props-empty">正在读取工程属性信息...</div>';
+    try {
       const rows = await getSubstationScale(state);
       body.innerHTML = `<table class="project-scale-table"><thead><tr><th>属性字段</th><th>属性值</th></tr></thead><tbody>${rows.map(({ label, value }) => `<tr><td>${escHtml(label)}</td><td>${escHtml(value)}</td></tr>`).join('')}</tbody></table>`;
-    }
-    modal.classList.add('open');
+    } catch (error) { body.innerHTML = `<div class="props-empty">工程属性读取失败：${escHtml(error instanceof Error ? error.message : String(error))}</div>`; }
   });
   close.addEventListener('click', () => modal.classList.remove('open'));
   modal.addEventListener('click', (event) => { if (event.target === modal) modal.classList.remove('open'); });
