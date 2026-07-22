@@ -60,8 +60,10 @@ function applyAction(ctx: ViewerContext, state: AppState, target: Target, action
   for (const model of models) model!.object.visible = false;
   nativeRoot?.traverse((object: THREE.Object3D) => {
     if (!object.userData.cbmPath) return;
-    let withinChosen = object === chosen;
-    for (let parent = object.parent; !withinChosen && parent; parent = parent.parent) withinChosen = parent === chosen;
-    object.visible = withinChosen;
+    // 保留被选设备的祖先路径（否则隐藏父节点会连同选中设备一起消失）以及其下属部件。
+    let related = object === chosen;
+    for (let parent = object.parent; !related && parent; parent = parent.parent) related = parent === chosen;
+    for (let parent = chosen.parent; !related && parent; parent = parent.parent) related = parent === object;
+    object.visible = related;
   });
 }

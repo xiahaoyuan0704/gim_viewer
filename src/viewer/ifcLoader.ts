@@ -27,6 +27,7 @@ export function registerModelEvents(
   state: AppState,
   callbacks: ModelEventCallbacks,
 ): void {
+  let materialOffset = 0;
   ctx.fragments.list.onItemSet.add(({ value: model }) => {
     model.useCamera((ctx.world.camera as any).three);
     (ctx.world.scene as any).three.add(model.object);
@@ -45,8 +46,10 @@ export function registerModelEvents(
     if (!('isLodMaterial' in material && material.isLodMaterial)) {
       // 使用固定 offset 分离重叠表面；随机 offset 会造成相机移动时的条纹伪影。
       material.polygonOffset = true;
-      material.polygonOffsetFactor = 1;
-      material.polygonOffsetUnits = 1;
+      // 让重叠 IFC 面使用稳定但不同的深度偏移，避免相机移动时的 z-fighting 条纹。
+      const offset = 1 + (materialOffset++ % 8);
+      material.polygonOffsetFactor = offset;
+      material.polygonOffsetUnits = offset;
     }
   });
 }
