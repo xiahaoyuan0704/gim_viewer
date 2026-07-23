@@ -4,16 +4,15 @@ import type { AppState } from '../app/state.js';
 import type { ViewerContext } from '../viewer/viewerEngine.js';
 import { cbmTreePanel } from './dom.js';
 import { getNodeDisplayName } from '../gim/gimIndexer.js';
+import { parseKeyValue } from '../gim/cbmParser.js';
 import { showNodeProperties, openPropsDrawer } from './propsDrawer.js';
 import { highlightIfcFromNode } from '../viewer/highlight.js';
 
 function getHierarchyLabel(node: CbmNode, state: AppState): string {
   const display = getNodeDisplayName(node, state.ifcGuidToName);
   if (node.path.toLowerCase().endsWith('project.cbm')) return `工程：${display === 'project.cbm' ? '未命名工程' : display}`;
-  const prefix = node.entityName || '部件';
-  const suffix = display && display !== prefix ? `_${display}` : '';
   const count = node.children.length > 0 ? ` (${node.children.length})` : '';
-  return `${prefix}${suffix}${count}`;
+  return `${display || '未命名部件'}${count}`;
 }
 
 function findNativeNodeGroup(ctx: ViewerContext, node: CbmNode): THREE.Object3D | null {
@@ -29,6 +28,25 @@ function setNativeNodeVisibility(ctx: ViewerContext, node: CbmNode, visible: boo
   if (!group) return false;
   group.visible = visible;
   return true;
+}
+
+async function resolveEngineeringName(state: AppState, node: CbmNode): Promise<string | null> {
+  if (!state.currentFiles) return null;
+  if (node.devPath) {
+    const dev = state.currentFiles.get(`DEV/${node.devPath}`);
+    if (dev) {
+      const kv = parseKeyValue(await dev.text());
+      if (kv.SYMBOLNAME) return kv.SYMBOLNAME;
+    }
+  }
+  if (node.famPath) {
+    const fam = state.currentFiles.get(`CBM/${node.famPath}`);
+    if (fam) {
+      const kv = parseKeyValue(await fam.text());
+      return kv['工程中名称'] || kv.ENGINEERINGNAME || kv.NAME || null;
+    }
+  }
+  return null;
 }
 
 const ENTITY_ICONS: Record<string, string> = {
@@ -57,6 +75,7 @@ export function renderCbmTree(
   label.className = 'tree-label';
   label.textContent = getHierarchyLabel(node, state);
   label.title = node.path;
+  void resolveEngineeringName(state, node).then((name) => { if (name) label.textContent = `${name}${node.children.length > 0 ? ` (${node.children.length})` : ''}`; });
   const visibility = document.createElement('input');
   visibility.type = 'checkbox'; visibility.className = 'tree-model-checkbox'; visibility.title = '显示/隐藏此层级模型';
   const nativeGroup = findNativeNodeGroup(ctx, node);

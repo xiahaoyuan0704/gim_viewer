@@ -55,6 +55,25 @@ function renderFamSections(sections: Map<string, Map<string, string>>): string {
   return html;
 }
 
+/** 递归读取 FAM 继承链，父族属性先显示、当前族属性后显示。 */
+async function loadFamInheritance(files: Map<string, File>, path: string, directory: 'CBM' | 'DEV', visited = new Set<string>()): Promise<Map<string, Map<string, string>>[]> {
+  const normalized = path.replace(/^\/?(?:CBM|DEV)\//i, '');
+  const fullPath = `${directory}/${normalized}`;
+  if (visited.has(fullPath)) return [];
+  visited.add(fullPath);
+  const file = files.get(fullPath);
+  if (!file) return [];
+  const text = await file.text();
+  const kv = parseKeyValue(text);
+  const inherited = kv.BASEFAMILY ? await loadFamInheritance(files, kv.BASEFAMILY, directory, visited) : [];
+  return [...inherited, parseFamSections(text)];
+}
+
+async function renderFamInheritance(files: Map<string, File>, path: string, directory: 'CBM' | 'DEV'): Promise<string> {
+  const chains = await loadFamInheritance(files, path, directory);
+  return chains.map(renderFamSections).join('');
+}
+
 /** 渲染 getItemsData 返回的属性数据为 HTML */
 function renderIfcItemData(data: Record<string, unknown>, depth = 0): string {
   if (!data || typeof data !== 'object') return '';
@@ -130,7 +149,7 @@ export async function showNodeProperties(ctx: ViewerContext, state: AppState, no
 
   if (node.famPath && state.currentFiles) {
     const f = state.currentFiles.get(`CBM/${node.famPath}`);
-    if (f) html += renderFamSections(parseFamSections(await f.text()));
+    if (f) html += await renderFamInheritance(state.currentFiles, node.famPath, 'CBM');
   }
 
   if (node.devPath && state.currentFiles) {
@@ -144,7 +163,7 @@ export async function showNodeProperties(ctx: ViewerContext, state: AppState, no
       const famRef = kv['BASEFAMILY'];
       if (famRef) {
         const famFile = state.currentFiles.get(`DEV/${famRef}`);
-        if (famFile) html += renderFamSections(parseFamSections(await famFile.text()));
+        if (famFile) html += await renderFamInheritance(state.currentFiles, famRef, 'DEV');
       }
     }
   }
@@ -231,7 +250,7 @@ export async function showIfcElementProperties(ctx: ViewerContext, state: AppSta
     html += '<div class="props-section"><div class="props-section-title">GIM 设备属性</div></div>';
     if (gimNode.famPath && state.currentFiles) {
       const f = state.currentFiles.get(`CBM/${gimNode.famPath}`);
-      if (f) html += renderFamSections(parseFamSections(await f.text()));
+      if (f) html += await renderFamInheritance(state.currentFiles, gimNode.famPath, 'CBM');
     }
     if (gimNode.devPath && state.currentFiles) {
       const f = state.currentFiles.get(`DEV/${gimNode.devPath}`);
@@ -240,7 +259,7 @@ export async function showIfcElementProperties(ctx: ViewerContext, state: AppSta
         const famRef = kv['BASEFAMILY'];
         if (famRef) {
           const famFile = state.currentFiles.get(`DEV/${famRef}`);
-          if (famFile) html += renderFamSections(parseFamSections(await famFile.text()));
+          if (famFile) html += await renderFamInheritance(state.currentFiles, famRef, 'DEV');
         }
       }
     }
