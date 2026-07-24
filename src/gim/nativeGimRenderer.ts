@@ -435,6 +435,45 @@ function mergeBufferGeometries(geometries: THREE.BufferGeometry[]): THREE.Buffer
   return merged;
 }
 
+function createTableGeometry(el: Element): THREE.BufferGeometry {
+  const tl1 = Number(el.getAttribute('TL1') || 1); const tl2 = Number(el.getAttribute('TL2') || tl1);
+  const ll1 = Number(el.getAttribute('LL1') || tl1); const ll2 = Number(el.getAttribute('LL2') || tl2); const h = Number(el.getAttribute('H') || 1);
+  const bottom = [new THREE.Vector2(-ll1 / 2, -ll2 / 2), new THREE.Vector2(ll1 / 2, -ll2 / 2), new THREE.Vector2(ll1 / 2, ll2 / 2), new THREE.Vector2(-ll1 / 2, ll2 / 2)];
+  const top = [new THREE.Vector2(-tl1 / 2, -tl2 / 2), new THREE.Vector2(tl1 / 2, -tl2 / 2), new THREE.Vector2(tl1 / 2, tl2 / 2), new THREE.Vector2(-tl1 / 2, tl2 / 2)];
+  const positions: number[] = []; for (const p of bottom) positions.push(p.x, p.y, 0); for (const p of top) positions.push(p.x, p.y, h);
+  const indices = [0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 1, 5, 6, 1, 6, 2, 2, 6, 7, 2, 7, 3, 3, 7, 4, 3, 4, 0];
+  const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); geometry.setIndex(indices); geometry.computeVertexNormals(); return geometry;
+}
+
+function createOffsetRectangularTable(el: Element): THREE.BufferGeometry {
+  const tl = Number(el.getAttribute('TL') || 1); const tw = Number(el.getAttribute('TW') || 1);
+  const ll = Number(el.getAttribute('LL') || tl); const lw = Number(el.getAttribute('LW') || tw); const h = Number(el.getAttribute('H') || 1);
+  const x = Number(el.getAttribute('XOFF') || 0); const y = Number(el.getAttribute('YOFF') || 0);
+  const bottom = [new THREE.Vector2(-ll / 2, -lw / 2), new THREE.Vector2(ll / 2, -lw / 2), new THREE.Vector2(ll / 2, lw / 2), new THREE.Vector2(-ll / 2, lw / 2)];
+  const top = [new THREE.Vector2(x - tl / 2, y - tw / 2), new THREE.Vector2(x + tl / 2, y - tw / 2), new THREE.Vector2(x + tl / 2, y + tw / 2), new THREE.Vector2(x - tl / 2, y + tw / 2)];
+  const positions: number[] = []; for (const p of bottom) positions.push(p.x, p.y, 0); for (const p of top) positions.push(p.x, p.y, h);
+  const indices = [0,1,2,0,2,3,4,6,5,4,7,6,0,4,5,0,5,1,1,5,6,1,6,2,2,6,7,2,7,3,3,7,4,3,4,0];
+  const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); geometry.setIndex(indices); geometry.computeVertexNormals(); return geometry;
+}
+
+function createEccentricCone(el: Element): THREE.BufferGeometry {
+  const tr = Number(el.getAttribute('TR') || 1); const br = Number(el.getAttribute('BR') || 1); const h = Number(el.getAttribute('H') || 1);
+  const xoff = Number(el.getAttribute('TOPXOFF') || 0); const yoff = Number(el.getAttribute('TOPYOFF') || 0);
+  const geometry = makeZAxisCylinder(tr, br, h, 32);
+  const positions = geometry.getAttribute('position') as THREE.BufferAttribute;
+  for (let i = 0; i < positions.count; i++) { const z = positions.getZ(i); const ratio = h ? z / h : 0; positions.setX(i, positions.getX(i) + xoff * ratio); positions.setY(i, positions.getY(i) + yoff * ratio); }
+  positions.needsUpdate = true; geometry.computeVertexNormals(); return geometry;
+}
+
+function createRectangularRing(el: Element): THREE.BufferGeometry {
+  const l = Number(el.getAttribute('L') || 1); const w = Number(el.getAttribute('W') || 1); const r = Math.min(Number(el.getAttribute('R') || 0), l / 2, w / 2);
+  const dr = Number(el.getAttribute('DR') || 1); const h = Number(el.getAttribute('H') || dr);
+  const shape = new THREE.Shape(); const outer = new THREE.Path();
+  const rounded = (path: THREE.Path, hw: number, hh: number, radius: number) => { path.moveTo(-hw + radius, -hh); path.lineTo(hw - radius, -hh); path.quadraticCurveTo(hw, -hh, hw, -hh + radius); path.lineTo(hw, hh - radius); path.quadraticCurveTo(hw, hh, hw - radius, hh); path.lineTo(-hw + radius, hh); path.quadraticCurveTo(-hw, hh, -hw, hh - radius); path.lineTo(-hw, -hh + radius); path.quadraticCurveTo(-hw, -hh, -hw + radius, -hh); };
+  rounded(outer, l / 2, w / 2, r); shape.copy(outer); const hole = new THREE.Path(); rounded(hole, Math.max(0.01, l / 2 - dr), Math.max(0.01, w / 2 - dr), Math.max(0, r - dr)); shape.holes.push(hole);
+  return new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false });
+}
+
 function createGeometry(entity: Element): THREE.BufferGeometry | null {
   const cuboid = entity.querySelector('Cuboid');
   if (cuboid) return makeZAxisBox(Number(cuboid.getAttribute('L') || 1), Number(cuboid.getAttribute('W') || 1), Number(cuboid.getAttribute('H') || 1));
@@ -442,13 +481,15 @@ function createGeometry(entity: Element): THREE.BufferGeometry | null {
   if (cylinder) return makeZAxisCylinder(Number(cylinder.getAttribute('R') || 1), Number(cylinder.getAttribute('R') || 1), Number(cylinder.getAttribute('H') || 1));
   const truncatedCone = entity.querySelector('TruncatedCone');
   if (truncatedCone) return makeZAxisCylinder(Number(truncatedCone.getAttribute('TR') || 1), Number(truncatedCone.getAttribute('BR') || 1), Number(truncatedCone.getAttribute('H') || 1));
+  const eccentricCone = entity.querySelector('EccentricTruncatedCone');
+  if (eccentricCone) return createEccentricCone(eccentricCone);
   const porcelain = entity.querySelector('PorcelainBushing');
   if (porcelain) return createPorcelainBushing(porcelain);
   const stretched = entity.querySelector('StretchedBody');
   if (stretched) return createStretchedBody(stretched);
   const ring = entity.querySelector('Ring');
   if (ring) {
-    const geometry = new THREE.TorusGeometry(Number(ring.getAttribute('R') || 1) + Number(ring.getAttribute('DR') || 0.2), Number(ring.getAttribute('DR') || 0.2), 16, 48, Number(ring.getAttribute('Rad') || Math.PI * 2));
+    const geometry = new THREE.TorusGeometry(Number(ring.getAttribute('R') || 1), Number(ring.getAttribute('DR') || 0.2) / 2, 16, 48, Number(ring.getAttribute('Rad') || Math.PI * 2));
     geometry.rotateX(Math.PI / 2);
     return geometry;
   }
@@ -462,6 +503,8 @@ function createGeometry(entity: Element): THREE.BufferGeometry | null {
     geometry.scale(Number(ellipsoid.getAttribute('LR') || ellipsoid.getAttribute('R') || 1), Number(ellipsoid.getAttribute('WR') || ellipsoid.getAttribute('R') || 1), Number(ellipsoid.getAttribute('H') || ellipsoid.getAttribute('HR') || 1));
     return geometry;
   }
+  const rectangularRing = entity.querySelector('RectangularRing');
+  if (rectangularRing) return createRectangularRing(rectangularRing);
   const tube = entity.querySelector('RoundSteelTube');
   if (tube) return makeZAxisCylinder(Number(tube.getAttribute('R') || tube.getAttribute('BR') || 1), Number(tube.getAttribute('R') || tube.getAttribute('BR') || 1), Number(tube.getAttribute('H') || tube.getAttribute('L') || 1));
   const flat = entity.querySelector('FlatSteel');
@@ -469,7 +512,9 @@ function createGeometry(entity: Element): THREE.BufferGeometry | null {
   const terminal = entity.querySelector('TerminalBlock');
   if (terminal) return makeZAxisBox(Number(terminal.getAttribute('L') || 1), Number(terminal.getAttribute('W') || 1), Number(terminal.getAttribute('T') || 1));
   const offsetTable = entity.querySelector('OffsetRectangularTable');
-  if (offsetTable) return makeZAxisBox(Number(offsetTable.getAttribute('L') || 1), Number(offsetTable.getAttribute('W') || 1), Number(offsetTable.getAttribute('H') || offsetTable.getAttribute('T') || 1));
+  if (offsetTable) return createOffsetRectangularTable(offsetTable);
+  const table = entity.querySelector('Table');
+  if (table) return createTableGeometry(table);
   const wire = entity.querySelector('Wire');
   if (wire) return createWireGeometry(wire);
   const insulator = entity.querySelector('Insulator');
