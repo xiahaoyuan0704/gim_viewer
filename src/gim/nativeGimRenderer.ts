@@ -123,9 +123,21 @@ function parseOrderedRefs(text: string, sectionKey: string, refPattern: RegExp, 
 
 function parseIndexedRefs(kv: Record<string, string>, sectionKey: string, refKey: string, includeColor = false): OrderedRef[] {
   const count = Number(kv[sectionKey] || 0);
-  if (!Number.isFinite(count) || count <= 0) return [];
+  // Exporters are not consistent about NUM, zero/one-based indices, or the
+  // singular/plural spelling of SOLIDMODEL(S)/SUBDEVICE(S). Discover the
+  // actual reference keys first instead of trusting NUM exclusively.
+  const escaped = refKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const keyPattern = new RegExp(`^${escaped}S?(\\d+)$`, 'i');
+  const indices = Object.keys(kv)
+    .map((key) => key.match(keyPattern))
+    .filter((match): match is RegExpMatchArray => Boolean(match))
+    .map((match) => Number(match[1]))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+  if (indices.length === 0 && (!Number.isFinite(count) || count <= 0)) return [];
+  const actualIndices = indices.length > 0 ? Array.from(new Set(indices)) : Array.from({ length: count }, (_, i) => i);
   const refs: OrderedRef[] = [];
-  for (let i = 0; i < count; i++) {
+  for (const i of actualIndices) {
     const ref = kv[`${refKey}${i}`] || kv[`${refKey}S${i}`];
     if (!ref) continue;
     refs.push({ ref, matrix: kv[`TRANSFORMMATRIX${i}`], color: includeColor ? kv[`COLOR${i}`] : undefined });
@@ -686,7 +698,7 @@ async function renderPhm(ctx: RenderContext, path: string, parent: THREE.Object3
     group.add(child);
     if (/\.mod$/i.test(childPath)) await renderMod(ctx, childPath, child, item.color);
     else if (/\.phm$/i.test(childPath)) await renderPhm(ctx, childPath, child);
-    else if (/\.stl$/i.test(childPath)) await renderStl(ctx, childPath, child, item.color);
+    else if (/\.(?:stl|svc)$/i.test(childPath)) await renderStl(ctx, childPath, child, item.color);
   }
   ctx.visitingPhm.delete(path);
 }
@@ -716,7 +728,7 @@ async function renderDev(ctx: RenderContext, path: string, parent: THREE.Object3
     group.add(child);
     if (/\.phm$/i.test(phmPath)) await renderPhm(ctx, phmPath, child);
     else if (/\.mod$/i.test(phmPath)) await renderMod(ctx, phmPath, child);
-    else if (/\.stl$/i.test(phmPath)) await renderStl(ctx, phmPath, child);
+    else if (/\.(?:stl|svc)$/i.test(phmPath)) await renderStl(ctx, phmPath, child);
   }
 
   const orderedSubRefs = parseOrderedRefs(text, 'SUBDEVICES.NUM', /^SUBDEVICES?/i, 2);
@@ -755,18 +767,18 @@ async function renderCbm(ctx: RenderContext, path: string, parent: THREE.Object3
   // absolute matrices are not multiplied by ancestor placement matrices.
   if (singleSubsystem) await renderCbm(ctx, singleSubsystem, parent, visited);
 
-  const subsystemCount = Number(kv['SUBSYSTEMS.NUM'] || 0);
-  for (let i = 0; i < subsystemCount; i++) {
-    const ref = kv[`SUBSYSTEM${i}`];
-    const childPath = ref ? resolveFilePath(ctx, ref, ['CBM']) : null;
+  const subsystemRefs = parseIndexedRefs(kv, 'SUBSYSTEMS.NUM', 'SUBSYSTEM');
+  for (const item of subsystemRefs) {
+    const childPath = resolveFilePath(ctx, item.ref, ['CBM']);
     if (childPath) await renderCbm(ctx, childPath, parent, visited);
   }
 
-  const subdeviceCount = Number(kv['SUBDEVICES.NUM'] || 0);
-  for (let i = 0; i < subdeviceCount; i++) {
-    const ref = kv[`SUBDEVICE${i}`] || kv[`SUBDEVICES${i}`];
-    const childPath = ref ? resolveFilePath(ctx, ref, ['CBM']) : null;
-    if (childPath) await renderCbm(ctx, childPath, parent, visited);
+  const subdeviceRefs = parseIndexedRefs(kv, 'SUBDEVICES.NUM', 'SUBDEVICE');
+  for (const item of subdeviceRefs) {
+    const childPath = resolveFilePath(ctx, item.ref, ['CBM']);
+    // SUBDEVICE placement is local to its owning device, unlike the absolute
+    // project/system SUBSYSTEM placement above.
+    if (childPath) await renderCbm(ctx, childPath, group, visited);
   }
 }
 
@@ -1088,6 +1100,7 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
   const phmFiles = listFiles(files, '.phm');
   const modFiles = listFiles(files, '.mod');
   const stlFiles = listFiles(files, '.stl');
+  const svcFiles = listFiles(files, '.svc');
 
   const renderedFromCbm = await renderFromCbmIfPossible(renderCtx, root, options);
 
@@ -1107,6 +1120,13 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
       offset += 2000;
     }
     for (const path of stlFiles) {
+      const group = new THREE.Group();
+      group.position.x = offset;
+      root.add(group);
+      await renderStl(renderCtx, path, group);
+      offset += 2000;
+    }
+    for (const path of svcFiles) {
       const group = new THREE.Group();
       group.position.x = offset;
       root.add(group);
