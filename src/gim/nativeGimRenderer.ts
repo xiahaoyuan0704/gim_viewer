@@ -1188,7 +1188,13 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
   ((ctx.world.scene as any).three as THREE.Scene).add(root);
   state.loadedMeshModels.set(NATIVE_MODEL_ID, { modelId: NATIVE_MODEL_ID, root, visible: true });
   addModelToUI(ctx, state, NATIVE_MODEL_ID);
-  state.hasFittedCamera = false;
-  fitCameraToScene(ctx, state);
+  // IFC is framed before the native overlay starts. Do not fit the combined
+  // scene again: a single malformed/outlying electrical primitive can expand
+  // the global bounds by kilometres and make the valid station look blank.
+  // Native-only GIM packages still need an initial camera fit.
+  if (state.loadedModels.size === 0) {
+    state.hasFittedCamera = false;
+    fitCameraToScene(ctx, state);
+  }
   return { group: root, alignedToIfc, ...renderCtx.stats };
 }
