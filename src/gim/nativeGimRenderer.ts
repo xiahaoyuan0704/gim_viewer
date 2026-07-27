@@ -11,6 +11,7 @@ const ROOT_NAME = 'GIM_NATIVE_ROOT';
 const NATIVE_MODEL_ID = 'GIM 原生电气设备';
 const UNIT_SCALE = 0.001; // GIM MOD/PHM/DEV 坐标通常为 mm，Three 场景中按 m 显示。
 const MAX_MERGE_VERTICES = 200_000; // 避免超大设备合并时瞬时复制几何导致 GPU/浏览器上下文丢失。
+const MAX_MESHES_FOR_SAFE_MERGE = 4_000;
 
 interface NativeStats {
   cbmCount: number;
@@ -623,21 +624,27 @@ async function renderMod(ctx: RenderContext, path: string, parent: THREE.Object3
       continue;
     }
 
-    const geometry = createGeometry(entity);
-    if (!geometry) continue;
-    const colorEl = entity.querySelector('Color');
-    const material = makeMaterial(parseColor(colorEl, inheritedColor), parseOpacity(colorEl));
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = `${path}#${id}`;
-    // GIM Wire/CurveCable 端点和拟合点保存的是工程坐标；它们已经包含
-    // 设备定位，不能再叠加 Entity 矩阵，否则整段导线会产生二次偏移。
-    if (!entity.querySelector('Wire, CurveCable')) {
-      mesh.applyMatrix4(parseMatrix(entity.querySelector('TransformMatrix')?.getAttribute('Value') || ''));
+    try {
+      const geometry = createGeometry(entity);
+      if (!geometry) continue;
+      const colorEl = entity.querySelector('Color');
+      const material = makeMaterial(parseColor(colorEl, inheritedColor), parseOpacity(colorEl));
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.name = `${path}#${id}`;
+      // GIM Wire/CurveCable 端点和拟合点保存的是工程坐标；它们已经包含
+      // 设备定位，不能再叠加 Entity 矩阵，否则整段导线会产生二次偏移。
+      if (!entity.querySelector('Wire, CurveCable')) {
+        mesh.applyMatrix4(parseMatrix(entity.querySelector('TransformMatrix')?.getAttribute('Value') || ''));
+      }
+      meshByEntityId.set(id, mesh);
+      if (!visible) continue;
+      parent.add(mesh);
+      ctx.stats.meshCount += 1;
+    } catch (error) {
+      // A single malformed/unsupported primitive must not discard thousands
+      // of valid electrical meshes already parsed from a large GIM package.
+      console.warn(`跳过无法解析的 MOD 图元 (${path}#${id}):`, error);
     }
-    meshByEntityId.set(id, mesh);
-    if (!visible) continue;
-    parent.add(mesh);
-    ctx.stats.meshCount += 1;
   }
 
   const unresolved = new Set(pendingBooleans.map((item) => item.id));
@@ -646,7 +653,13 @@ async function renderMod(ctx: RenderContext, path: string, parent: THREE.Object3
     progressed = false;
     for (const item of pendingBooleans) {
       if (!unresolved.has(item.id)) continue;
-      const mesh = resolveBooleanMesh(item, meshByEntityId, `${path}#${item.id}`);
+      let mesh: THREE.Mesh | null = null;
+      try {
+        mesh = resolveBooleanMesh(item, meshByEntityId, `${path}#${item.id}`);
+      } catch (error) {
+        console.warn(`跳过无法解析的布尔图元 (${path}#${item.id}):`, error);
+        unresolved.delete(item.id);
+      }
       if (!mesh) continue;
       meshByEntityId.set(item.id, mesh);
       unresolved.delete(item.id);
@@ -696,9 +709,13 @@ async function renderPhm(ctx: RenderContext, path: string, parent: THREE.Object3
     child.name = ref;
     child.applyMatrix4(parseMatrix(item.matrix));
     group.add(child);
-    if (/\.mod$/i.test(childPath)) await renderMod(ctx, childPath, child, item.color);
-    else if (/\.phm$/i.test(childPath)) await renderPhm(ctx, childPath, child);
-    else if (/\.(?:stl|svc)$/i.test(childPath)) await renderStl(ctx, childPath, child, item.color);
+    try {
+      if (/\.mod$/i.test(childPath)) await renderMod(ctx, childPath, child, item.color);
+      else if (/\.phm$/i.test(childPath)) await renderPhm(ctx, childPath, child);
+      else if (/\.(?:stl|svc)$/i.test(childPath)) await renderStl(ctx, childPath, child, item.color);
+    } catch (error) {
+      console.warn(`跳过无法解析的 PHM 子模型 (${childPath}):`, error);
+    }
   }
   ctx.visitingPhm.delete(path);
 }
@@ -726,9 +743,13 @@ async function renderDev(ctx: RenderContext, path: string, parent: THREE.Object3
     child.name = ref;
     child.applyMatrix4(parseMatrix(item.matrix));
     group.add(child);
-    if (/\.phm$/i.test(phmPath)) await renderPhm(ctx, phmPath, child);
-    else if (/\.mod$/i.test(phmPath)) await renderMod(ctx, phmPath, child);
-    else if (/\.(?:stl|svc)$/i.test(phmPath)) await renderStl(ctx, phmPath, child);
+    try {
+      if (/\.phm$/i.test(phmPath)) await renderPhm(ctx, phmPath, child);
+      else if (/\.mod$/i.test(phmPath)) await renderMod(ctx, phmPath, child);
+      else if (/\.(?:stl|svc)$/i.test(phmPath)) await renderStl(ctx, phmPath, child);
+    } catch (error) {
+      console.warn(`跳过无法解析的 DEV 实体模型 (${phmPath}):`, error);
+    }
   }
 
   const orderedSubRefs = parseOrderedRefs(text, 'SUBDEVICES.NUM', /^SUBDEVICES?/i, 2);
@@ -736,7 +757,13 @@ async function renderDev(ctx: RenderContext, path: string, parent: THREE.Object3
   for (const item of subRefs) {
     const ref = item.ref;
     const devPath = resolveFilePath(ctx, ref, ['DEV']);
-    if (devPath) await renderDev(ctx, devPath, group, parseMatrix(item.matrix));
+    if (devPath) {
+      try {
+        await renderDev(ctx, devPath, group, parseMatrix(item.matrix));
+      } catch (error) {
+        console.warn(`跳过无法解析的 DEV 子设备 (${devPath}):`, error);
+      }
+    }
   }
   ctx.visitingDev.delete(path);
 }
@@ -1143,9 +1170,21 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
     // 完整工程没有指定 CBM 子集时，退回到 IFC 场景整体包围盒对齐，避免原生一次设备整体飘离站区。
     if (!alignedToIfc) alignedToIfc = await alignNativeRootToLoadedIfc(ctx, state, root, options.cbmFiles);
   }
-  // 合并每个 CBM 节点内的几何以降低 draw call，同时保留 CBM 层级和 cbmPath。
-  optimizeCbmGroup(root);
-  applyNativeRuntimeHints(root);
+  // Large GIM packages can contain tens of thousands of primitives. Cloning
+  // all of them during merge creates a severe memory peak and may abort the
+  // overlay before the root is ever added. Keep original meshes for that case.
+  if (renderCtx.stats.meshCount <= MAX_MESHES_FOR_SAFE_MERGE) {
+    try {
+      optimizeCbmGroup(root);
+    } catch (error) {
+      console.warn('GIM 几何合并失败，保留已解析的原始设备网格:', error);
+    }
+  }
+  try {
+    applyNativeRuntimeHints(root);
+  } catch (error) {
+    console.warn('GIM 运行时包围体计算失败，继续显示已解析设备:', error);
+  }
   ((ctx.world.scene as any).three as THREE.Scene).add(root);
   state.loadedMeshModels.set(NATIVE_MODEL_ID, { modelId: NATIVE_MODEL_ID, root, visible: true });
   addModelToUI(ctx, state, NATIVE_MODEL_ID);
