@@ -27,6 +27,7 @@ interface RenderContext {
   stats: NativeStats;
   visitingDev: Set<string>;
   visitingPhm: Set<string>;
+  selectedCbmKeys?: Set<string>;
 }
 
 export interface NativeGimRenderResult extends NativeStats {
@@ -48,6 +49,23 @@ function buildPathIndex(files: Map<string, File>): Map<string, string> {
 
 function normalizeRef(ref: string): string {
   return ref.replace(/\\/g, '/').replace(/^\.\//, '').trim();
+}
+
+function cbmSelectionKeys(refs: Set<string>): Set<string> {
+  const keys = new Set<string>();
+  for (const ref of refs) {
+    const normalized = normalizeRef(ref).toLowerCase();
+    keys.add(normalized);
+    const fileName = normalized.split('/').pop();
+    if (fileName) keys.add(fileName);
+  }
+  return keys;
+}
+
+function isSelectedCbmPath(ctx: RenderContext, path: string): boolean {
+  if (!ctx.selectedCbmKeys) return true;
+  const normalized = normalizeRef(path).toLowerCase();
+  return ctx.selectedCbmKeys.has(normalized) || ctx.selectedCbmKeys.has(normalized.split('/').pop() || normalized);
 }
 
 function resolveFilePath(ctx: RenderContext, ref: string, preferredDirs: string[]): string | null {
@@ -600,8 +618,8 @@ async function renderMod(ctx: RenderContext, path: string, parent: THREE.Object3
     const material = makeMaterial(parseColor(colorEl, inheritedColor), parseOpacity(colorEl));
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = `${path}#${id}`;
-    // Wire 的端点坐标由导出器以工程绝对坐标写入；再应用实体矩阵会导致线缆整体二次偏移。
-    if (!entity.querySelector('Wire')) mesh.applyMatrix4(parseMatrix(entity.querySelector('TransformMatrix')?.getAttribute('Value') || ''));
+    // MOD 图元坐标均为实体局部坐标，Wire 同样需要应用其实体变换。
+    mesh.applyMatrix4(parseMatrix(entity.querySelector('TransformMatrix')?.getAttribute('Value') || ''));
     meshByEntityId.set(id, mesh);
     if (!visible) continue;
     parent.add(mesh);
@@ -727,7 +745,7 @@ async function renderCbm(ctx: RenderContext, path: string, parent: THREE.Object3
 
   const devRef = kv.OBJECTMODELPOINTER;
   const devPath = devRef ? resolveFilePath(ctx, devRef, ['DEV']) : null;
-  if (devPath) await renderDev(ctx, devPath, group);
+  if (devPath && isSelectedCbmPath(ctx, path)) await renderDev(ctx, devPath, group);
 
   const singleSubsystem = kv.SUBSYSTEM ? resolveFilePath(ctx, kv.SUBSYSTEM, ['CBM']) : null;
   if (singleSubsystem) await renderCbm(ctx, singleSubsystem, group, visited);
@@ -750,9 +768,14 @@ async function renderCbm(ctx: RenderContext, path: string, parent: THREE.Object3
 async function renderFromCbmIfPossible(ctx: RenderContext, parent: THREE.Object3D, options: NativeGimRenderOptions = {}): Promise<boolean> {
   const before = ctx.stats.meshCount;
   if (options.cbmFiles && options.cbmFiles.size > 0) {
-    for (const ref of options.cbmFiles) {
-      const cbmPath = resolveFilePath(ctx, ref, ['CBM']);
-      if (cbmPath) await renderCbm(ctx, cbmPath, parent, new Set<string>());
+    ctx.selectedCbmKeys = cbmSelectionKeys(options.cbmFiles);
+    const project = resolveFilePath(ctx, 'project.cbm', ['CBM']);
+    if (project) await renderCbm(ctx, project, parent);
+    else {
+      for (const ref of options.cbmFiles) {
+        const cbmPath = resolveFilePath(ctx, ref, ['CBM']);
+        if (cbmPath) await renderCbm(ctx, cbmPath, parent, new Set<string>());
+      }
     }
     return ctx.stats.meshCount > before;
   }
