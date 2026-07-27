@@ -10,8 +10,7 @@ import { addModelToUI } from '../ui/modelList.js';
 const ROOT_NAME = 'GIM_NATIVE_ROOT';
 const NATIVE_MODEL_ID = 'GIM 原生电气设备';
 const UNIT_SCALE = 0.001; // GIM MOD/PHM/DEV 坐标通常为 mm，Three 场景中按 m 显示。
-const MAX_MERGE_VERTICES = 200_000; // 避免超大设备合并时瞬时复制几何导致 GPU/浏览器上下文丢失。
-const MAX_MESHES_FOR_SAFE_MERGE = 4_000;
+const MAX_MERGE_VERTICES = 120_000; // 分 CBM 控制合并峰值，同时显著减少最终 GPU draw call。
 
 interface NativeStats {
   cbmCount: number;
@@ -202,6 +201,19 @@ function makeMaterial(color: THREE.Color, opacity = 1): THREE.MeshStandardMateri
     opacity,
     side: THREE.DoubleSide,
   });
+}
+
+function isRenderableGeometry(geometry: THREE.BufferGeometry): boolean {
+  const position = geometry.getAttribute('position');
+  if (!position || position.count === 0) return false;
+  const array = position.array;
+  for (let i = 0; i < array.length; i++) {
+    const value = Number(array[i]);
+    // Reject NaN/Infinity and corrupt coordinates before they reach WebGL.
+    // GIM uses millimetres; 1e9 mm is already far beyond a valid station.
+    if (!Number.isFinite(value) || Math.abs(value) > 1e9) return false;
+  }
+  return true;
 }
 
 function createStretchedBody(el: Element): THREE.BufferGeometry {
@@ -627,6 +639,11 @@ async function renderMod(ctx: RenderContext, path: string, parent: THREE.Object3
     try {
       const geometry = createGeometry(entity);
       if (!geometry) continue;
+      if (!isRenderableGeometry(geometry)) {
+        geometry.dispose();
+        console.warn(`跳过坐标无效的 MOD 图元 (${path}#${id})`);
+        continue;
+      }
       const colorEl = entity.querySelector('Color');
       const material = makeMaterial(parseColor(colorEl, inheritedColor), parseOpacity(colorEl));
       const mesh = new THREE.Mesh(geometry, material);
@@ -678,6 +695,11 @@ async function renderStl(ctx: RenderContext, path: string, parent: THREE.Object3
   if (!file) return;
   try {
     const geometry = new STLLoader().parse(await file.arrayBuffer());
+    if (!isRenderableGeometry(geometry)) {
+      geometry.dispose();
+      console.warn(`跳过坐标无效的 STL/SVC 模型 (${path})`);
+      return;
+    }
     geometry.computeVertexNormals();
     const mesh = new THREE.Mesh(geometry, makeMaterial(parseColor(null, color)));
     mesh.name = path;
@@ -1170,15 +1192,14 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
     // 完整工程没有指定 CBM 子集时，退回到 IFC 场景整体包围盒对齐，避免原生一次设备整体飘离站区。
     if (!alignedToIfc) alignedToIfc = await alignNativeRootToLoadedIfc(ctx, state, root, options.cbmFiles);
   }
-  // Large GIM packages can contain tens of thousands of primitives. Cloning
-  // all of them during merge creates a severe memory peak and may abort the
-  // overlay before the root is ever added. Keep original meshes for that case.
-  if (renderCtx.stats.meshCount <= MAX_MESHES_FOR_SAFE_MERGE) {
-    try {
-      optimizeCbmGroup(root);
-    } catch (error) {
-      console.warn('GIM 几何合并失败，保留已解析的原始设备网格:', error);
-    }
+  // Always optimize per CBM. Skipping this for large packages leaves thousands
+  // of Mesh/Material draw calls; uploading those at once can lose the WebGL
+  // context and blank both IFC and native geometry. The per-CBM vertex limit
+  // above bounds the temporary CPU memory used by each merge.
+  try {
+    optimizeCbmGroup(root);
+  } catch (error) {
+    console.warn('GIM 几何合并失败，保留已解析的原始设备网格:', error);
   }
   try {
     applyNativeRuntimeHints(root);
