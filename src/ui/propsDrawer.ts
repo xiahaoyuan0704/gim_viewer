@@ -44,12 +44,18 @@ export function setupPropsDrawer(ctx: ViewerContext): void {
 }
 
 /** 渲染 FAM 分节属性为 HTML */
+function isInternalGimReference(value: string): boolean {
+  const normalized = value.replace(/\$+$/, '').trim();
+  return /\.(?:fam|cbm)$/i.test(normalized);
+}
+
 function renderFamSections(sections: Map<string, Map<string, string>>): string {
   let html = '';
   for (const [secName, props] of sections) {
-    if (props.size === 0) continue;
+    const visibleProps = Array.from(props).filter(([, value]) => !isInternalGimReference(value));
+    if (visibleProps.length === 0) continue;
     html += `<div class="props-section"><div class="props-section-title">${escHtml(secName)}</div><table class="props-table">`;
-    for (const [key, val] of props) html += `<tr><td class="prop-key">${escHtml(key)}</td><td class="prop-val">${escHtml(val || '—')}</td></tr>`;
+    for (const [key, val] of visibleProps) html += `<tr><td class="prop-key">${escHtml(key)}</td><td class="prop-val">${escHtml(val || '—')}</td></tr>`;
     html += '</table></div>';
   }
   return html;
@@ -150,7 +156,6 @@ export async function showNodeProperties(ctx: ViewerContext, state: AppState, no
   const bp: [string, string][] = [
     ['实体类型', node.entityName],
     ['分类名称', node.classifyName],
-    ['CBM 文件', node.path.split('/').pop() || ''],
   ];
   if (node.ifcFile) bp.push(['IFC 文件', node.ifcFile]);
   if (node.ifcGuid) bp.push(['IFC GUID', node.ifcGuid]);
@@ -165,8 +170,8 @@ export async function showNodeProperties(ctx: ViewerContext, state: AppState, no
     const cbm = resolveGimFile(state.currentFiles, node.path, ['CBM']);
     if (cbm) {
       const allCbmProperties = parseKeyValue(await cbm.file.text());
-      html += '<div class="props-section"><div class="props-section-title">CBM 完整属性</div><table class="props-table">';
-      for (const [key, value] of Object.entries(allCbmProperties)) {
+      html += '<div class="props-section"><div class="props-section-title">设计信息</div><table class="props-table">';
+      for (const [key, value] of Object.entries(allCbmProperties).filter(([, value]) => !isInternalGimReference(value))) {
         html += `<tr><td class="prop-key">${escHtml(key)}</td><td class="prop-val">${escHtml(value || '—')}</td></tr>`;
       }
       html += '</table></div>';
