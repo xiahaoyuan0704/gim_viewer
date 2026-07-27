@@ -15,19 +15,28 @@ function getHierarchyLabel(node: CbmNode, state: AppState): string {
   return `${display || '未命名部件'}${count}`;
 }
 
-function findNativeNodeGroup(ctx: ViewerContext, node: CbmNode): THREE.Object3D | null {
+function collectNodePaths(node: CbmNode, paths = new Set<string>()): Set<string> {
+  paths.add(node.path.toLowerCase());
+  for (const child of node.children) collectNodePaths(child, paths);
+  return paths;
+}
+
+function findNativeNodeGroups(ctx: ViewerContext, node: CbmNode): THREE.Object3D[] {
   const root = ((ctx.world.scene as any).three as THREE.Scene).getObjectByName('GIM_NATIVE_ROOT');
-  if (!root) return null;
-  let found: THREE.Object3D | null = null;
-  root.traverse((object) => { if (object.userData.cbmPath === node.path) found = object; });
+  if (!root) return [];
+  const paths = collectNodePaths(node);
+  const found: THREE.Object3D[] = [];
+  root.traverse((object) => {
+    const cbmPath = typeof object.userData.cbmPath === 'string' ? object.userData.cbmPath.toLowerCase() : '';
+    if (paths.has(cbmPath)) found.push(object);
+  });
   return found;
 }
 
 function setNativeNodeVisibility(ctx: ViewerContext, node: CbmNode, visible: boolean): boolean {
-  const group = findNativeNodeGroup(ctx, node);
-  if (!group) return false;
-  group.visible = visible;
-  return true;
+  const groups = findNativeNodeGroups(ctx, node);
+  for (const group of groups) group.visible = visible;
+  return groups.length > 0;
 }
 
 async function resolveEngineeringName(state: AppState, node: CbmNode): Promise<string | null> {
@@ -78,8 +87,10 @@ export function renderCbmTree(
   void resolveEngineeringName(state, node).then((name) => { if (name) label.textContent = `${name}${node.children.length > 0 ? ` (${node.children.length})` : ''}`; });
   const visibility = document.createElement('input');
   visibility.type = 'checkbox'; visibility.className = 'tree-model-checkbox'; visibility.title = '显示/隐藏此层级模型';
-  const nativeGroup = findNativeNodeGroup(ctx, node);
-  visibility.checked = nativeGroup?.visible ?? true; visibility.disabled = !nativeGroup;
+  const nativeGroups = findNativeNodeGroups(ctx, node);
+  visibility.checked = nativeGroups.length === 0 || nativeGroups.every((group) => group.visible);
+  visibility.indeterminate = nativeGroups.some((group) => group.visible) && !nativeGroups.every((group) => group.visible);
+  visibility.disabled = nativeGroups.length === 0;
   visibility.addEventListener('click', (event) => event.stopPropagation());
   visibility.addEventListener('change', () => { setNativeNodeVisibility(ctx, node, visibility.checked); });
   row.appendChild(toggle); row.appendChild(visibility); row.appendChild(icon); row.appendChild(label);
