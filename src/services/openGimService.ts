@@ -101,14 +101,24 @@ export async function loadSelectedIfcFiles(ctx: ViewerContext, state: AppState, 
         await waitForViewerFrame();
         // 只叠加当前 IFC 所关联的电气设备，避免把整个 GIM 的 DEV/PHM/MOD 一次性送入 GPU 而掉帧或白屏。
         const overlayCbmFiles = getNativeOverlayCbmFiles(state, selected);
-        if (overlayCbmFiles) {
-          const nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles, { cbmFiles: overlayCbmFiles, alignToIfc: false, coordinateWithIfc: true });
-          if (nativeResult) {
-            ctx.fragments.core.update(true);
-            await waitForViewerFrame();
-          }
+        let nativeResult = overlayCbmFiles
+          ? await renderNativeGimModel(ctx, state, state.currentFiles, { cbmFiles: overlayCbmFiles, alignToIfc: false, coordinateWithIfc: true })
+          : null;
+        // 线路工程、旧版变电站包可能没有 FileDevRelation，或者其 CBM
+        // 引用方式与当前选中的 IFC 名称不一致。精确叠加没有产出时必须
+        // 回退到包内完整 CBM/DEV 根，而不能静默结束后只留下 IFC。
+        if (!nativeResult) {
+          console.warn('未通过 IFC-CBM 关系找到设备，回退到完整 GIM 原生设备。');
+          nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles, {
+            alignToIfc: false,
+            coordinateWithIfc: true,
+          });
+        }
+        if (nativeResult) {
+          ctx.fragments.core.update(true);
+          await waitForViewerFrame();
         } else {
-          console.warn('未发现可渲染的 DEV 设备引用。');
+          console.warn('GIM 包内未找到可渲染的 CBM/DEV/PHM/MOD 设备几何。');
         }
       } catch (nativeErr) {
         console.warn('GIM 原生细节渲染失败，继续显示 IFC:', nativeErr);

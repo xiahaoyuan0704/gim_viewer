@@ -47,7 +47,13 @@ function buildPathIndex(files: Map<string, File>): Map<string, string> {
 }
 
 function normalizeRef(ref: string): string {
-  return ref.replace(/\\/g, '/').replace(/^\.\//, '').trim();
+  return ref
+    .replace(/\0/g, '')
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '')
+    .trim()
+    .replace(/^["']+|["'$]+$/g, '')
+    .trim();
 }
 
 function resolveFilePath(ctx: RenderContext, ref: string, preferredDirs: string[]): string | null {
@@ -99,16 +105,20 @@ function parseOrderedRefs(text: string, sectionKey: string, refPattern: RegExp, 
   let cursor = start + 1;
   for (let i = 0; i < count && cursor < lines.length; i++) {
     const refLine = lines[cursor++];
-    if (!refLine || !refPattern.test(refLine.key)) break;
+    if (!refLine || !refPattern.test(refLine.key)) return [];
     const item: OrderedRef = { ref: refLine.value };
     for (let step = 1; step < tupleSize && cursor < lines.length; step++) {
       const line = lines[cursor++];
       if (/^TRANSFORMMATRIX/i.test(line.key)) item.matrix = line.value;
       else if (/^COLOR/i.test(line.key)) item.color = line.value;
+      else return [];
     }
     refs.push(item);
   }
-  return refs;
+  // Indexed exports place all SOLIDMODEL keys independently and are parsed by
+  // parseIndexedRefs. Only accept this path for a complete interleaved table;
+  // a partial match used to silently discard most device models.
+  return refs.length === count ? refs : [];
 }
 
 function parseIndexedRefs(kv: Record<string, string>, sectionKey: string, refKey: string, includeColor = false): OrderedRef[] {
