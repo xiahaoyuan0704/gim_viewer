@@ -27,7 +27,6 @@ interface RenderContext {
   stats: NativeStats;
   visitingDev: Set<string>;
   visitingPhm: Set<string>;
-  selectedCbmKeys?: Set<string>;
 }
 
 export interface NativeGimRenderResult extends NativeStats {
@@ -49,23 +48,6 @@ function buildPathIndex(files: Map<string, File>): Map<string, string> {
 
 function normalizeRef(ref: string): string {
   return ref.replace(/\\/g, '/').replace(/^\.\//, '').trim();
-}
-
-function cbmSelectionKeys(refs: Set<string>): Set<string> {
-  const keys = new Set<string>();
-  for (const ref of refs) {
-    const normalized = normalizeRef(ref).toLowerCase();
-    keys.add(normalized);
-    const fileName = normalized.split('/').pop();
-    if (fileName) keys.add(fileName);
-  }
-  return keys;
-}
-
-function isSelectedCbmPath(ctx: RenderContext, path: string): boolean {
-  if (!ctx.selectedCbmKeys) return true;
-  const normalized = normalizeRef(path).toLowerCase();
-  return ctx.selectedCbmKeys.has(normalized) || ctx.selectedCbmKeys.has(normalized.split('/').pop() || normalized);
 }
 
 function resolveFilePath(ctx: RenderContext, ref: string, preferredDirs: string[]): string | null {
@@ -349,7 +331,14 @@ function collectWirePoints(el: Element): THREE.Vector3[] {
   const points: THREE.Vector3[] = [];
   pushUniquePoint(points, parseVector(el.getAttribute('StartCoord') || el.getAttribute('Start') || el.getAttribute('BeginCoord') || ''));
 
-  for (const attrName of ['Array', 'Points', 'PointArray', 'Path', 'Route', 'Coords', 'Coordinates', 'ControlPoints', 'MiddleCoords']) {
+  // CurveCable/Wire exporters use different names for the same ordered path.
+  // Keep the file order: the first/last coordinates are the terminals and the
+  // fit/control coordinates describe the cable between them.
+  for (const attrName of [
+    'CurveControlCoordArray', 'FitCoordArray', 'ControlCoordArray',
+    'Array', 'Points', 'PointArray', 'Path', 'Route', 'Coords',
+    'Coordinates', 'ControlPoints', 'MiddleCoords',
+  ]) {
     for (const point of parseVectorList(el.getAttribute(attrName) || '')) pushUniquePoint(points, point);
   }
 
@@ -533,7 +522,7 @@ function createGeometry(entity: Element): THREE.BufferGeometry | null {
   if (offsetTable) return createOffsetRectangularTable(offsetTable);
   const table = entity.querySelector('Table');
   if (table) return createTableGeometry(table);
-  const wire = entity.querySelector('Wire');
+  const wire = entity.querySelector('Wire, CurveCable');
   if (wire) return createWireGeometry(wire);
   const insulator = entity.querySelector('Insulator');
   if (insulator) return createInsulatorGeometry(insulator);
@@ -618,8 +607,11 @@ async function renderMod(ctx: RenderContext, path: string, parent: THREE.Object3
     const material = makeMaterial(parseColor(colorEl, inheritedColor), parseOpacity(colorEl));
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = `${path}#${id}`;
-    // MOD 图元坐标均为实体局部坐标，Wire 同样需要应用其实体变换。
-    mesh.applyMatrix4(parseMatrix(entity.querySelector('TransformMatrix')?.getAttribute('Value') || ''));
+    // GIM Wire/CurveCable 端点和拟合点保存的是工程坐标；它们已经包含
+    // 设备定位，不能再叠加 Entity 矩阵，否则整段导线会产生二次偏移。
+    if (!entity.querySelector('Wire, CurveCable')) {
+      mesh.applyMatrix4(parseMatrix(entity.querySelector('TransformMatrix')?.getAttribute('Value') || ''));
+    }
     meshByEntityId.set(id, mesh);
     if (!visible) continue;
     parent.add(mesh);
@@ -745,37 +737,39 @@ async function renderCbm(ctx: RenderContext, path: string, parent: THREE.Object3
 
   const devRef = kv.OBJECTMODELPOINTER;
   const devPath = devRef ? resolveFilePath(ctx, devRef, ['DEV']) : null;
-  if (devPath && isSelectedCbmPath(ctx, path)) await renderDev(ctx, devPath, group);
+  if (devPath) await renderDev(ctx, devPath, group);
 
   const singleSubsystem = kv.SUBSYSTEM ? resolveFilePath(ctx, kv.SUBSYSTEM, ['CBM']) : null;
-  if (singleSubsystem) await renderCbm(ctx, singleSubsystem, group, visited);
+  // CBM TRANSFORMMATRIX is expressed in the project coordinate system. Keep
+  // logical descendants beside their parent in the Three.js scene so their
+  // absolute matrices are not multiplied by ancestor placement matrices.
+  if (singleSubsystem) await renderCbm(ctx, singleSubsystem, parent, visited);
 
   const subsystemCount = Number(kv['SUBSYSTEMS.NUM'] || 0);
   for (let i = 0; i < subsystemCount; i++) {
     const ref = kv[`SUBSYSTEM${i}`];
     const childPath = ref ? resolveFilePath(ctx, ref, ['CBM']) : null;
-    if (childPath) await renderCbm(ctx, childPath, group, visited);
+    if (childPath) await renderCbm(ctx, childPath, parent, visited);
   }
 
   const subdeviceCount = Number(kv['SUBDEVICES.NUM'] || 0);
   for (let i = 0; i < subdeviceCount; i++) {
     const ref = kv[`SUBDEVICE${i}`] || kv[`SUBDEVICES${i}`];
     const childPath = ref ? resolveFilePath(ctx, ref, ['CBM']) : null;
-    if (childPath) await renderCbm(ctx, childPath, group, visited);
+    if (childPath) await renderCbm(ctx, childPath, parent, visited);
   }
 }
 
 async function renderFromCbmIfPossible(ctx: RenderContext, parent: THREE.Object3D, options: NativeGimRenderOptions = {}): Promise<boolean> {
   const before = ctx.stats.meshCount;
   if (options.cbmFiles && options.cbmFiles.size > 0) {
-    ctx.selectedCbmKeys = cbmSelectionKeys(options.cbmFiles);
-    const project = resolveFilePath(ctx, 'project.cbm', ['CBM']);
-    if (project) await renderCbm(ctx, project, parent);
-    else {
-      for (const ref of options.cbmFiles) {
-        const cbmPath = resolveFilePath(ctx, ref, ['CBM']);
-        if (cbmPath) await renderCbm(ctx, cbmPath, parent, new Set<string>());
-      }
+    // CBM placement matrices in GIM are project-absolute, not parent-relative.
+    // Render selected device nodes as roots; nesting them below project/system
+    // nodes would multiply absolute matrices and lift/offset entire devices.
+    const visited = new Set<string>();
+    for (const ref of options.cbmFiles) {
+      const cbmPath = resolveFilePath(ctx, ref, ['CBM']);
+      if (cbmPath) await renderCbm(ctx, cbmPath, parent, visited);
     }
     return ctx.stats.meshCount > before;
   }
