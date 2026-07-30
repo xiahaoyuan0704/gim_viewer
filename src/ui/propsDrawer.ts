@@ -55,7 +55,12 @@ function renderFamSections(sections: Map<string, Map<string, string>>): string {
     const visibleProps = Array.from(props).filter(([, value]) => !isInternalGimReference(value));
     if (visibleProps.length === 0) continue;
     html += `<div class="props-section"><div class="props-section-title">${escHtml(secName)}</div><table class="props-table">`;
-    for (const [key, val] of visibleProps) html += `<tr><td class="prop-key">${escHtml(key)}</td><td class="prop-val">${escHtml(val || '—')}</td></tr>`;
+    for (const [key, val] of visibleProps) {
+      const separator = val.indexOf('=');
+      const label = separator > 0 ? val.slice(0, separator).trim() : key;
+      const value = separator > 0 ? val.slice(separator + 1).trim() : val;
+      html += `<tr><td class="prop-val" colspan="2">${escHtml(label)}：${escHtml(value || '—')}</td></tr>`;
+    }
     html += '</table></div>';
   }
   return html;
@@ -89,9 +94,25 @@ async function loadFamInheritance(files: Map<string, File>, path: string, direct
   return [...inherited, parseFamSections(text)];
 }
 
-async function renderFamInheritance(files: Map<string, File>, path: string, directory: 'CBM' | 'DEV'): Promise<string> {
+async function renderFamInheritanceParts(files: Map<string, File>, path: string, directory: 'CBM' | 'DEV'): Promise<{ defaults: string; remaining: string }> {
   const chains = await loadFamInheritance(files, path, directory);
-  return chains.map(renderFamSections).join('');
+  const defaults: Map<string, Map<string, string>>[] = [];
+  const remaining: Map<string, Map<string, string>>[] = [];
+  for (const sections of chains) {
+    const defaultProps = sections.get('默认');
+    if (defaultProps) defaults.push(new Map([['默认', defaultProps]]));
+    const rest = new Map(Array.from(sections).filter(([name]) => name !== '默认'));
+    if (rest.size > 0) remaining.push(rest);
+  }
+  return {
+    defaults: defaults.map(renderFamSections).join(''),
+    remaining: remaining.map(renderFamSections).join(''),
+  };
+}
+
+async function renderFamInheritance(files: Map<string, File>, path: string, directory: 'CBM' | 'DEV'): Promise<string> {
+  const parts = await renderFamInheritanceParts(files, path, directory);
+  return parts.defaults + parts.remaining;
 }
 
 /** 渲染 getItemsData 返回的属性数据为 HTML */
@@ -152,6 +173,31 @@ function renderIfcItemData(data: Record<string, unknown>, depth = 0): string {
 /** 显示 CbmNode 属性 */
 export async function showNodeProperties(ctx: ViewerContext, state: AppState, node: CbmNode): Promise<void> {
   let html = `<div class="props-header">${escHtml(getNodeDisplayName(node, state.ifcGuidToName))}</div>`;
+  let defaultFamHtml = '';
+  let remainingFamHtml = '';
+  let devProperties: Record<string, string> | null = null;
+  if (state.currentFiles && node.famPath) {
+    const fam = resolveGimFile(state.currentFiles, node.famPath, ['CBM', 'FAM']);
+    if (fam) {
+      const parts = await renderFamInheritanceParts(state.currentFiles, node.famPath, 'CBM');
+      defaultFamHtml += parts.defaults;
+      remainingFamHtml += parts.remaining;
+    }
+  }
+  if (state.currentFiles && node.devPath) {
+    const dev = resolveGimFile(state.currentFiles, node.devPath, ['DEV']);
+    if (dev) {
+      devProperties = parseKeyValue(await dev.file.text());
+      const famRef = devProperties.BASEFAMILY;
+      if (famRef && resolveGimFile(state.currentFiles, famRef, ['DEV', 'FAM'])) {
+        const parts = await renderFamInheritanceParts(state.currentFiles, famRef, 'DEV');
+        defaultFamHtml += parts.defaults;
+        remainingFamHtml += parts.remaining;
+      }
+    }
+  }
+  // “默认”包含最常用的设备设计参数，FAM 渲染器已将其排在首位。
+  html += defaultFamHtml;
   html += '<div class="props-section"><div class="props-section-title">基本信息</div><table class="props-table">';
   const bp: [string, string][] = [
     ['实体类型', node.entityName],
@@ -178,25 +224,13 @@ export async function showNodeProperties(ctx: ViewerContext, state: AppState, no
     }
   }
 
-  if (node.famPath && state.currentFiles) {
-    const f = resolveGimFile(state.currentFiles, node.famPath, ['CBM', 'FAM']);
-    if (f) html += await renderFamInheritance(state.currentFiles, node.famPath, 'CBM');
-  }
+  html += remainingFamHtml;
 
-  if (node.devPath && state.currentFiles) {
-    const f = resolveGimFile(state.currentFiles, node.devPath, ['DEV']);
-    if (f) {
-      const kv = parseKeyValue(await f.file.text());
+  if (devProperties) {
       html += '<div class="props-section"><div class="props-section-title">设备信息</div><table class="props-table">';
-      if (kv['SYMBOLNAME']) html += `<tr><td class="prop-key">设备名称</td><td class="prop-val">${escHtml(kv['SYMBOLNAME'])}</td></tr>`;
-      if (kv['TYPE']) html += `<tr><td class="prop-key">设备类型</td><td class="prop-val">${escHtml(kv['TYPE'])}</td></tr>`;
+      if (devProperties.SYMBOLNAME) html += `<tr><td class="prop-key">设备名称</td><td class="prop-val">${escHtml(devProperties.SYMBOLNAME)}</td></tr>`;
+      if (devProperties.TYPE) html += `<tr><td class="prop-key">设备类型</td><td class="prop-val">${escHtml(devProperties.TYPE)}</td></tr>`;
       html += '</table></div>';
-      const famRef = kv['BASEFAMILY'];
-      if (famRef) {
-        const famFile = resolveGimFile(state.currentFiles, famRef, ['DEV', 'FAM']);
-        if (famFile) html += await renderFamInheritance(state.currentFiles, famRef, 'DEV');
-      }
-    }
   }
 
   if (node.transformMatrix && node.transformMatrix !== '1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1') {
