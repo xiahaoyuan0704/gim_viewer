@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import type { ViewerContext } from './viewerEngine.js';
 import type { AppState } from '../app/state.js';
 import type { CbmNode } from '../gim/types.js';
-import { resetHighlight, HIGHLIGHT_STYLE } from './highlight.js';
+import { resetHighlight, HIGHLIGHT_COLOR, HIGHLIGHT_STYLE } from './highlight.js';
 
 export type OnElementSelected = (modelId: string, localId: number) => void;
 export type OnNativeNodeSelected = (node: CbmNode) => void;
@@ -26,8 +26,8 @@ function showNativeHighlight(object: THREE.Object3D): void {
     const originals = Array.isArray(original) ? original : [original];
     const highlighted = originals.map((material) => {
       const clone = material.clone() as THREE.MeshStandardMaterial;
-      if (clone.color) clone.color.set(0xffffff);
-      if (clone.emissive) { clone.emissive.set(0xffffff); clone.emissiveIntensity = 0.35; }
+      if (clone.color) clone.color.set(HIGHLIGHT_COLOR);
+      if (clone.emissive) { clone.emissive.set(HIGHLIGHT_COLOR); clone.emissiveIntensity = 0.4; }
       clone.polygonOffset = true; clone.polygonOffsetFactor = -1; clone.polygonOffsetUnits = -1;
       return clone;
     });

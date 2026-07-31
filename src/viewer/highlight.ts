@@ -8,8 +8,10 @@ import { getNodeDisplayName } from '../gim/gimIndexer.js';
 import { frameBox } from './camera.js';
 
 /** 高亮样式 */
+export const HIGHLIGHT_COLOR = 0xff2d2d;
+
 export const HIGHLIGHT_STYLE: OBCF.MaterialDefinition = {
-  color: new THREE.Color(0x00ccff),
+  color: new THREE.Color(HIGHLIGHT_COLOR),
   renderedFaces: OBCF.RenderedFaces.TWO,
   opacity: 0.6,
   transparent: true,
