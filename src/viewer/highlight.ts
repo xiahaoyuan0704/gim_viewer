@@ -9,6 +9,7 @@ import { frameBox } from './camera.js';
 
 /** 高亮样式 */
 export const HIGHLIGHT_COLOR = 0xff2d2d;
+export const CLEAR_NATIVE_HIGHLIGHT_EVENT = 'gim-clear-native-highlight';
 
 export const HIGHLIGHT_STYLE: OBCF.MaterialDefinition = {
   color: new THREE.Color(HIGHLIGHT_COLOR),
@@ -19,6 +20,7 @@ export const HIGHLIGHT_STYLE: OBCF.MaterialDefinition = {
 
 /** 重置当前高亮 */
 export async function resetHighlight(ctx: ViewerContext, state: AppState): Promise<void> {
+  window.dispatchEvent(new Event(CLEAR_NATIVE_HIGHLIGHT_EVENT));
   if (state.highlightedItems) {
     await ctx.fragments.resetHighlight(state.highlightedItems as any);
     state.highlightedItems = null;

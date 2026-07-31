@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import type { ViewerContext } from './viewerEngine.js';
 import type { AppState } from '../app/state.js';
 import type { CbmNode } from '../gim/types.js';
-import { resetHighlight, HIGHLIGHT_COLOR, HIGHLIGHT_STYLE } from './highlight.js';
+import { CLEAR_NATIVE_HIGHLIGHT_EVENT, resetHighlight, HIGHLIGHT_COLOR, HIGHLIGHT_STYLE } from './highlight.js';
 
 export type OnElementSelected = (modelId: string, localId: number) => void;
 export type OnNativeNodeSelected = (node: CbmNode) => void;
@@ -17,6 +17,8 @@ function clearNativeHighlight(): void {
   }
   nativeHighlightedMeshes.length = 0;
 }
+
+window.addEventListener(CLEAR_NATIVE_HIGHLIGHT_EVENT, clearNativeHighlight);
 
 function showNativeHighlight(object: THREE.Object3D): void {
   clearNativeHighlight();
@@ -36,13 +38,13 @@ function showNativeHighlight(object: THREE.Object3D): void {
   });
 }
 
-function selectNativeNode(
+async function selectNativeNode(
   ctx: ViewerContext,
   state: AppState,
   container: HTMLElement,
   event: MouseEvent,
   onNativeNodeSelected: OnNativeNodeSelected,
-): boolean {
+): Promise<boolean> {
   const canvas = container.querySelector('canvas') as HTMLCanvasElement | null;
   const rect = (canvas || container).getBoundingClientRect();
   const pointer = new THREE.Vector2(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
@@ -57,6 +59,7 @@ function selectNativeNode(
     const fileName = String(owner.userData.cbmPath).split('/').pop() || '';
     const node = state.cbmNodeIndex.get(fileName);
     if (!node) continue;
+    await resetHighlight(ctx, state);
     showNativeHighlight(owner);
     onNativeNodeSelected(node);
     window.dispatchEvent(new CustomEvent('gim-selection', { detail: { node } }));
@@ -81,7 +84,7 @@ export function setupSelection(
     const mouse = new THREE.Vector2(e.clientX, e.clientY);
 
     try {
-      if (selectNativeNode(ctx, state, container, e, onNativeNodeSelected)) return;
+      if (await selectNativeNode(ctx, state, container, e, onNativeNodeSelected)) return;
       const result = await ctx.fragments.raycast({
         camera: (ctx.world.camera as any).three,
         mouse,
