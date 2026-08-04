@@ -139,15 +139,6 @@
       .project-scale-table th, .project-scale-table td { padding: 11px 13px; border: 1px solid var(--border-strong); text-align: left; vertical-align: top; }
       .project-scale-table th { color: #fff; background: rgba(255, 255, 255, .09); font-weight: 650; }
       .project-scale-table td:first-child { width: 46%; color: #bbb; }
-      .equipment-inventory-modal { width: 980px; }
-      .equipment-inventory-summary { margin-bottom: 12px; color: #aaa; font-size: 12px; }
-      .equipment-inventory-table { width: 100%; border-collapse: collapse; color: #eee; font-size: 13px; table-layout: fixed; }
-      .equipment-inventory-table th, .equipment-inventory-table td { padding: 10px 12px; border: 1px solid var(--border-strong); text-align: left; vertical-align: top; word-break: break-word; }
-      .equipment-inventory-table th { position: sticky; top: -17px; z-index: 1; color: #fff; background: #292929; font-weight: 650; }
-      .equipment-inventory-table th:nth-child(1), .equipment-inventory-table td:nth-child(1) { width: 28%; }
-      .equipment-inventory-table th:nth-child(2), .equipment-inventory-table td:nth-child(2) { width: 58%; }
-      .equipment-inventory-table th:nth-child(3), .equipment-inventory-table td:nth-child(3) { width: 14%; text-align: center; }
-      .equipment-inventory-table tbody tr:hover { background: rgba(255,255,255,.045); }
       #selection-menu { position: fixed; z-index: 10000; display: none; min-width: 136px; padding: 5px; border: 1px solid #444; border-radius: 8px; background: #171717; box-shadow: 0 12px 30px rgba(0,0,0,.42); }
       #selection-menu.open { display: grid; gap: 2px; }
       .selection-menu-item { padding: 8px 10px; border: 0; border-radius: 5px; background: transparent; color: #eee; text-align: left; cursor: pointer; font-size: 12px; }
@@ -169,7 +160,7 @@
           <input id="file-input" class="hidden-input" type="file" accept=".ifc,.stl,.svc" multiple />
           <button id="btn-clear" class="btn btn-secondary">清空场景</button>
           <button id="btn-project-scale" class="btn btn-secondary">工程规模信息</button>
-          <button id="btn-equipment-inventory" class="btn btn-secondary">设备统计清单</button>
+          <button id="btn-equipment-inventory" class="btn btn-secondary">导出设备清单</button>
         </div>
         <div id="sidebar-tabs">
           <button class="tab-btn active" data-tab="tab-models">模型</button>
@@ -242,17 +233,6 @@
           <button id="project-scale-close" class="modal-close" title="关闭">✕</button>
         </div>
         <div id="project-scale-body" class="modal-body"></div>
-      </div>
-    </div>
-
-    <!-- 设备名称、关键参数与数量统计 -->
-    <div id="equipment-inventory-modal" class="modal-overlay">
-      <div class="modal equipment-inventory-modal">
-        <div class="modal-header">
-          <h3>设备统计清单</h3>
-          <button id="equipment-inventory-close" class="modal-close" title="关闭">✕</button>
-        </div>
-        <div id="equipment-inventory-body" class="modal-body"></div>
       </div>
     </div>
 

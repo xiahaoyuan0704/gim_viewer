@@ -120,7 +120,7 @@ async function buildInventory(state: AppState): Promise<EquipmentInventoryRow[]>
     return result;
   };
 
-  for (const node of collectNodes(state.currentCbmTree)) {
+  const processNode = async (node: CbmNode): Promise<void> => {
     const candidates = [node.name, node.classifyName, node.entityName];
     const properties: Array<[string, string]> = [];
     const visitedFamilies = new Set<File>();
@@ -145,12 +145,18 @@ async function buildInventory(state: AppState): Promise<EquipmentInventoryRow[]>
       await addProperties(resolveFile(files, dev.BASEFAMILY || '', ['DEV', 'FAM']), ['DEV', 'FAM', 'CBM']);
     }
     const category = findCategory(candidates);
-    if (category === null) continue;
+    if (category === null) return;
     quantities[category] += 1;
     for (const [label, value] of properties) {
       if (!label || !value || /名称|NAME|文件|FAMILY|MODEL/i.test(label)) continue;
       availableParameters[category].set(label, (availableParameters[category].get(label) || 0) + 1);
     }
+  };
+  const nodes = collectNodes(state.currentCbmTree);
+  // Read in bounded parallel batches: considerably faster than thousands of
+  // serial File.text() calls without creating an equally large promise spike.
+  for (let offset = 0; offset < nodes.length; offset += 100) {
+    await Promise.all(nodes.slice(offset, offset + 100).map(processNode));
   }
 
   const priority = /电压|容量|电流|功率|变比|准确|开断|电阻|电感|电容|频率|冷却|绝缘|防护/;
