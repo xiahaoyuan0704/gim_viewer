@@ -11,6 +11,7 @@ export interface EquipmentInventoryRow {
 }
 
 type CatalogItem = { name: string; aliases?: string[] };
+type DefaultProperty = { label: string; value: string };
 
 /** 设备名称列固定按原始清单输出；数量由第五层级设备名称匹配统计。 */
 const EQUIPMENT_CATALOG: CatalogItem[] = [
@@ -136,25 +137,25 @@ function shouldKeepDefaultParameter(label: string, value: string): boolean {
   return !/文件|FAMILY|BASEFAMILY|REF|PATH/i.test(label);
 }
 
-async function collectDefaultParameterNames(
+async function collectDefaultProperties(
   files: Map<string, File>,
   famRef: string | undefined,
   dirs: string[],
   textCache: WeakMap<File, Promise<string>>,
   visited = new Set<string>(),
-): Promise<string[]> {
+): Promise<DefaultProperty[]> {
   const resolved = resolveFile(files, famRef, dirs);
   if (!resolved || visited.has(resolved.path.toLowerCase())) return [];
   visited.add(resolved.path.toLowerCase());
   const text = await getFileText(resolved.file, textCache);
   const kv = parseKeyValue(text);
-  const inherited = kv.BASEFAMILY ? await collectDefaultParameterNames(files, kv.BASEFAMILY, dirs, textCache, visited) : [];
+  const inherited = kv.BASEFAMILY ? await collectDefaultProperties(files, kv.BASEFAMILY, dirs, textCache, visited) : [];
   const section = parseFamSections(text).get('默认');
-  const own: string[] = [];
+  const own: DefaultProperty[] = [];
   if (section) {
     for (const [key, raw] of section) {
       const decoded = parseFamValue(key, raw);
-      if (shouldKeepDefaultParameter(decoded.label, decoded.value)) own.push(decoded.label);
+      if (shouldKeepDefaultParameter(decoded.label, decoded.value)) own.push(decoded);
     }
   }
   return [...inherited, ...own];
@@ -169,15 +170,21 @@ function getFileText(file: File, cache: WeakMap<File, Promise<string>>): Promise
   return text;
 }
 
-async function collectNodeDefaultParameters(node: CbmNode, files: Map<string, File>, textCache: WeakMap<File, Promise<string>>): Promise<string[]> {
-  const parameters: string[] = [];
-  parameters.push(...await collectDefaultParameterNames(files, node.famPath, ['CBM', 'FAM'], textCache));
+async function collectNodeDefaultProperties(node: CbmNode, files: Map<string, File>, textCache: WeakMap<File, Promise<string>>): Promise<DefaultProperty[]> {
+  const properties: DefaultProperty[] = [];
+  properties.push(...await collectDefaultProperties(files, node.famPath, ['CBM', 'FAM'], textCache));
   const devFile = resolveFile(files, node.devPath, ['DEV']);
   if (devFile) {
     const dev = parseKeyValue(await getFileText(devFile.file, textCache));
-    parameters.push(...await collectDefaultParameterNames(files, dev.BASEFAMILY, ['DEV', 'FAM', 'CBM'], textCache));
+    properties.push(...await collectDefaultProperties(files, dev.BASEFAMILY, ['DEV', 'FAM', 'CBM'], textCache));
   }
-  return Array.from(new Set(parameters));
+  const seen = new Set<string>();
+  return properties.filter((property) => {
+    const key = `${property.label}=${property.value}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function buildInventory(state: AppState): Promise<EquipmentInventoryRow[]> {
@@ -189,13 +196,20 @@ async function buildInventory(state: AppState): Promise<EquipmentInventoryRow[]>
   const nodes = collectDeviceNodes(state.currentCbmTree);
 
   const processNode = async (node: CbmNode): Promise<void> => {
+    const properties = await collectNodeDefaultProperties(node, files, textCache);
     const deviceName = getNodeDisplayName(node, state.ifcGuidToName).trim() || node.name || node.classifyName || '未命名设备';
-    const catalogIndex = findCatalogIndex(deviceName);
+    const catalogIndex = findCatalogIndex([
+      deviceName,
+      node.name,
+      node.classifyName,
+      node.entityName,
+      ...properties.flatMap((property) => [property.label, property.value]),
+    ].join(' '));
     if (catalogIndex === null) return;
     rows[catalogIndex].quantity += 1;
-    for (const parameter of await collectNodeDefaultParameters(node, files, textCache)) {
+    for (const { label } of properties) {
       const bucket = parametersByCatalog[catalogIndex];
-      bucket.set(parameter, (bucket.get(parameter) || 0) + 1);
+      bucket.set(label, (bucket.get(label) || 0) + 1);
     }
   };
 
