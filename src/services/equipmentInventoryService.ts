@@ -6,6 +6,7 @@ import { getNodeDisplayName } from '../gim/gimIndexer.js';
 
 export interface EquipmentInventoryRow {
   name: string;
+  category: string;
   keyParameters: string[];
   parameterDetails: EquipmentParameterDetail[];
   quantity: number;
@@ -16,83 +17,7 @@ export interface EquipmentParameterDetail {
   values: string[];
 }
 
-type CatalogItem = { name: string; aliases?: string[] };
 type DefaultProperty = { label: string; value: string };
-
-/** 设备名称列固定按原始清单输出；数量由第五层级设备名称匹配统计。 */
-const EQUIPMENT_CATALOG: CatalogItem[] = [
-  { name: '油浸式变压器' },
-  { name: '干式变压器' },
-  { name: '换流变压器' },
-  { name: '油浸式电抗器' },
-  { name: '干式电抗器' },
-  { name: '电磁式电流互感器', aliases: ['电流互感器'] },
-  { name: '电子式电流互感器' },
-  { name: '电磁式电压互感器' },
-  { name: '电容式电压互感器' },
-  { name: '电子式电压互感器' },
-  { name: '组合电器' },
-  { name: '直流电压测量装置' },
-  { name: '组合电器GIS', aliases: ['GIS组合电器', 'GIS'] },
-  { name: '组合电器HGIS', aliases: ['HGIS组合电器', 'HGIS'] },
-  { name: '交流滤波器' },
-  { name: '直流滤波器' },
-  { name: '交流避雷器' },
-  { name: '直流旁路开关' },
-  { name: '交流隔离开关' },
-  { name: '交流接地开关' },
-  { name: '直流隔离开关' },
-  { name: '直流接地开关' },
-  { name: '换流阀' },
-  { name: '消弧线圈/接地变压器成套装置', aliases: ['消弧线圈', '接地变压器成套装置'] },
-  { name: '接地电阻成套装置' },
-  { name: '中性点成套设备', aliases: ['中性点成套装置'] },
-  { name: '隔直装置' },
-  { name: '框架式电容器组' },
-  { name: '集合式电容器组' },
-  { name: '串补电容器成套装置', aliases: ['串补电容器', '串联补偿装置'] },
-  { name: '降压式SVG' },
-  { name: '直挂式SVG' },
-  { name: 'SVC', aliases: ['静止无功补偿器'] },
-  { name: '滤波器电容器' },
-  { name: '直流耦合电容器' },
-  { name: '电阻器' },
-  { name: '高压开关柜' },
-  { name: '低压开关柜' },
-  { name: '熔断器' },
-  { name: '避雷器' },
-  { name: '直流避雷器/滤波器', aliases: ['直流避雷器'] },
-  { name: '交流支柱绝缘子', aliases: ['支柱绝缘子'] },
-  { name: '直流支柱绝缘子' },
-  { name: '交流穿墙套管', aliases: ['穿墙套管'] },
-  { name: '直流穿墙套管' },
-  { name: '平波电抗器' },
-  { name: '线路故障测量装置' },
-  { name: '蓄电池组' },
-  { name: '预制舱体' },
-  { name: '安防设备' },
-  { name: '火灾报警设备' },
-];
-
-function normalizeName(value: string): string {
-  return value.toUpperCase().replace(/[\s_\-—（）()\/·*]/g, '');
-}
-
-function findCatalogIndex(deviceName: string): number | null {
-  const normalized = normalizeName(deviceName);
-  let bestIndex = -1;
-  let bestLength = 0;
-  EQUIPMENT_CATALOG.forEach((item, index) => {
-    for (const candidate of [item.name, ...(item.aliases || [])]) {
-      const token = normalizeName(candidate);
-      if (token && normalized.includes(token) && token.length > bestLength) {
-        bestIndex = index;
-        bestLength = token.length;
-      }
-    }
-  });
-  return bestIndex >= 0 ? bestIndex : null;
-}
 
 const inventoryCache = new WeakMap<Map<string, File>, Promise<EquipmentInventoryRow[]>>();
 
@@ -195,35 +120,42 @@ async function collectNodeDefaultProperties(node: CbmNode, files: Map<string, Fi
 
 async function buildInventory(state: AppState): Promise<EquipmentInventoryRow[]> {
   const files = state.currentFiles;
-  const rows = EQUIPMENT_CATALOG.map(({ name }) => ({
-    name,
-    keyParameters: [] as string[],
-    parameterDetails: [] as EquipmentParameterDetail[],
-    quantity: 0,
-  }));
-  if (!files) return rows;
+  if (!files) return [];
   const textCache = new WeakMap<File, Promise<string>>();
-  const parametersByCatalog = EQUIPMENT_CATALOG.map(() => new Map<string, { count: number; values: Set<string> }>());
+  const groups = new Map<string, {
+    name: string;
+    category: string;
+    quantity: number;
+    parameters: Map<string, { count: number; values: Set<string> }>;
+  }>();
   const nodes = collectDeviceNodes(state.currentCbmTree);
 
   const processNode = async (node: CbmNode): Promise<void> => {
     const properties = await collectNodeDefaultProperties(node, files, textCache);
-    const deviceName = getNodeDisplayName(node, state.ifcGuidToName).trim() || node.name || node.classifyName || '未命名设备';
-    const catalogIndex = findCatalogIndex([
-      deviceName,
-      node.name,
-      node.classifyName,
-      node.entityName,
-      ...properties.flatMap((property) => [property.label, property.value]),
-    ].join(' '));
-    if (catalogIndex === null) return;
-    rows[catalogIndex].quantity += 1;
+    const devFile = resolveFile(files, node.devPath, ['DEV']);
+    const dev = devFile ? parseKeyValue(await getFileText(devFile.file, textCache)) : {};
+    // 使用层级树设备层对应 FAM“型号/MODEL”作为名称，而不再使用
+    // “设备名称”（如“高压开关柜”）进行模糊归类。
+    const propertyName = properties.find(({ label }) => /^(?:型号|模型|MODEL)$/i.test(label))?.value;
+    const name = propertyName?.trim()
+      || dev.SYMBOLNAME?.trim()
+      || getNodeDisplayName(node, state.ifcGuidToName).trim()
+      || node.name
+      || '未命名设备';
+    const defaultCategory = properties.find(({ label }) => /^(?:类型|类别|CATEGORY|FAMILYNAME)$/i.test(label))?.value;
+    const category = defaultCategory?.trim() || dev.TYPE?.trim() || node.entityName || '未分类';
+    const groupKey = `${name}\u0000${category}`;
+    let group = groups.get(groupKey);
+    if (!group) {
+      group = { name, category, quantity: 0, parameters: new Map() };
+      groups.set(groupKey, group);
+    }
+    group.quantity += 1;
     for (const { label, value } of properties) {
-      const bucket = parametersByCatalog[catalogIndex];
-      let parameter = bucket.get(label);
+      let parameter = group.parameters.get(label);
       if (!parameter) {
         parameter = { count: 0, values: new Set<string>() };
-        bucket.set(label, parameter);
+        group.parameters.set(label, parameter);
       }
       parameter.count += 1;
       if (value && value !== '—' && value !== '-') parameter.values.add(value);
@@ -234,18 +166,21 @@ async function buildInventory(state: AppState): Promise<EquipmentInventoryRow[]>
     await Promise.all(nodes.slice(offset, offset + 100).map(processNode));
   }
 
-  return rows.map((row, index) => {
-    const parameters = Array.from(parametersByCatalog[index])
+  return Array.from(groups.values()).map((group) => {
+    const parameters = Array.from(group.parameters)
       .sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0], 'zh-CN'));
     return {
-      ...row,
+      name: group.name,
+      category: group.category,
+      quantity: group.quantity,
       keyParameters: parameters.map(([parameter]) => parameter),
       parameterDetails: parameters.map(([name, parameter]) => ({
         name,
         values: Array.from(parameter.values).sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true })),
       })),
     };
-  });
+  }).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true })
+    || a.category.localeCompare(b.category, 'zh-CN', { numeric: true }));
 }
 
 export function getEquipmentInventory(state: AppState): Promise<EquipmentInventoryRow[]> {

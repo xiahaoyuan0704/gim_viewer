@@ -19,6 +19,7 @@ function createExcelWorkbook(rows: Awaited<ReturnType<typeof getEquipmentInvento
       <Cell><Data ss:Type="Number">${row.keyParameters.length}</Data></Cell>
       <Cell><Data ss:Type="Number">${row.quantity}</Data></Cell>
     </Row>`).join('');
+  const usedSheetNames = new Set<string>(['设备统计清单']);
   const detailSheets = rows
     .filter((row) => row.quantity > 0 && row.parameterDetails.length > 0)
     .map((row) => {
@@ -28,7 +29,7 @@ function createExcelWorkbook(rows: Awaited<ReturnType<typeof getEquipmentInvento
       <Cell><Data ss:Type="String">${xml(parameter.values.join('；'))}</Data></Cell>
     </Row>`).join('');
       return `
- <Worksheet ss:Name="${xml(createWorksheetName(row.name))}">
+ <Worksheet ss:Name="${xml(createWorksheetName(row.name, row.category, usedSheetNames))}">
   <Table ss:DefaultRowHeight="20">
    <Column ss:Width="180"/><Column ss:Width="420"/>
    <Row ss:StyleID="Header"><Cell><Data ss:Type="String">关键参数</Data></Cell><Cell><Data ss:Type="String">具体信息</Data></Cell></Row>
@@ -60,8 +61,21 @@ function createExcelWorkbook(rows: Awaited<ReturnType<typeof getEquipmentInvento
 }
 
 /** SpreadsheetML 工作表名称最长 31 个字符，且不能包含 Excel 保留字符。 */
-function createWorksheetName(name: string): string {
-  return name.replace(/[\\/?*\[\]:]/g, '／').slice(0, 31) || '设备参数';
+function createWorksheetName(name: string, category: string, usedNames: Set<string>): string {
+  const sanitize = (value: string) => value.replace(/[\\/?*\[\]:]/g, '／');
+  const base = sanitize(name).slice(0, 31) || '设备参数';
+  let candidate = base;
+  let suffixIndex = 1;
+  while (usedNames.has(candidate)) {
+    const suffix = `（${sanitize(category || String(suffixIndex))}）`;
+    candidate = `${base.slice(0, Math.max(1, 31 - suffix.length))}${suffix}`.slice(0, 31);
+    if (usedNames.has(candidate)) {
+      const numericSuffix = `_${suffixIndex++}`;
+      candidate = `${base.slice(0, 31 - numericSuffix.length)}${numericSuffix}`;
+    }
+  }
+  usedNames.add(candidate);
+  return candidate;
 }
 
 function downloadExcel(content: string): void {
