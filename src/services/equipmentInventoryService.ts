@@ -7,7 +7,13 @@ import { getNodeDisplayName } from '../gim/gimIndexer.js';
 export interface EquipmentInventoryRow {
   name: string;
   keyParameters: string[];
+  parameterDetails: EquipmentParameterDetail[];
   quantity: number;
+}
+
+export interface EquipmentParameterDetail {
+  name: string;
+  values: string[];
 }
 
 type CatalogItem = { name: string; aliases?: string[] };
@@ -189,10 +195,15 @@ async function collectNodeDefaultProperties(node: CbmNode, files: Map<string, Fi
 
 async function buildInventory(state: AppState): Promise<EquipmentInventoryRow[]> {
   const files = state.currentFiles;
-  const rows = EQUIPMENT_CATALOG.map(({ name }) => ({ name, keyParameters: [] as string[], quantity: 0 }));
+  const rows = EQUIPMENT_CATALOG.map(({ name }) => ({
+    name,
+    keyParameters: [] as string[],
+    parameterDetails: [] as EquipmentParameterDetail[],
+    quantity: 0,
+  }));
   if (!files) return rows;
   const textCache = new WeakMap<File, Promise<string>>();
-  const parametersByCatalog = EQUIPMENT_CATALOG.map(() => new Map<string, number>());
+  const parametersByCatalog = EQUIPMENT_CATALOG.map(() => new Map<string, { count: number; values: Set<string> }>());
   const nodes = collectDeviceNodes(state.currentCbmTree);
 
   const processNode = async (node: CbmNode): Promise<void> => {
@@ -207,9 +218,15 @@ async function buildInventory(state: AppState): Promise<EquipmentInventoryRow[]>
     ].join(' '));
     if (catalogIndex === null) return;
     rows[catalogIndex].quantity += 1;
-    for (const { label } of properties) {
+    for (const { label, value } of properties) {
       const bucket = parametersByCatalog[catalogIndex];
-      bucket.set(label, (bucket.get(label) || 0) + 1);
+      let parameter = bucket.get(label);
+      if (!parameter) {
+        parameter = { count: 0, values: new Set<string>() };
+        bucket.set(label, parameter);
+      }
+      parameter.count += 1;
+      if (value && value !== '—' && value !== '-') parameter.values.add(value);
     }
   };
 
@@ -217,12 +234,18 @@ async function buildInventory(state: AppState): Promise<EquipmentInventoryRow[]>
     await Promise.all(nodes.slice(offset, offset + 100).map(processNode));
   }
 
-  return rows.map((row, index) => ({
-    ...row,
-    keyParameters: Array.from(parametersByCatalog[index])
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN'))
-      .map(([parameter]) => parameter),
-  }));
+  return rows.map((row, index) => {
+    const parameters = Array.from(parametersByCatalog[index])
+      .sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0], 'zh-CN'));
+    return {
+      ...row,
+      keyParameters: parameters.map(([parameter]) => parameter),
+      parameterDetails: parameters.map(([name, parameter]) => ({
+        name,
+        values: Array.from(parameter.values).sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true })),
+      })),
+    };
+  });
 }
 
 export function getEquipmentInventory(state: AppState): Promise<EquipmentInventoryRow[]> {

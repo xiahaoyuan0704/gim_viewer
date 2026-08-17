@@ -16,9 +16,27 @@ function createExcelWorkbook(rows: Awaited<ReturnType<typeof getEquipmentInvento
   const rowXml = rows.map((row) => `
     <Row ss:StyleID="Cell">
       <Cell><Data ss:Type="String">${xml(row.name)}</Data></Cell>
-      <Cell><Data ss:Type="String">${xml(row.keyParameters.join('、'))}</Data></Cell>
+      <Cell><Data ss:Type="Number">${row.keyParameters.length}</Data></Cell>
       <Cell><Data ss:Type="Number">${row.quantity}</Data></Cell>
     </Row>`).join('');
+  const detailSheets = rows
+    .filter((row) => row.quantity > 0 && row.parameterDetails.length > 0)
+    .map((row) => {
+      const detailRows = row.parameterDetails.map((parameter) => `
+    <Row ss:StyleID="Cell">
+      <Cell><Data ss:Type="String">${xml(parameter.name)}</Data></Cell>
+      <Cell><Data ss:Type="String">${xml(parameter.values.join('；'))}</Data></Cell>
+    </Row>`).join('');
+      return `
+ <Worksheet ss:Name="${xml(createWorksheetName(row.name))}">
+  <Table ss:DefaultRowHeight="20">
+   <Column ss:Width="180"/><Column ss:Width="420"/>
+   <Row ss:StyleID="Header"><Cell><Data ss:Type="String">关键参数</Data></Cell><Cell><Data ss:Type="String">具体信息</Data></Cell></Row>
+   ${detailRows}
+  </Table>
+  <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><FreezePanes/><FrozenNoSplit/><SplitHorizontal>1</SplitHorizontal><TopRowBottomPane>1</TopRowBottomPane><ActivePane>2</ActivePane></WorksheetOptions>
+ </Worksheet>`;
+    }).join('');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <?mso-application progid="Excel.Sheet"?>
 <Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
@@ -31,13 +49,19 @@ function createExcelWorkbook(rows: Awaited<ReturnType<typeof getEquipmentInvento
  </Styles>
  <Worksheet ss:Name="设备统计清单">
   <Table ss:DefaultRowHeight="20">
-   <Column ss:Width="150"/><Column ss:Width="360"/><Column ss:Width="70"/>
-   <Row ss:StyleID="Header"><Cell><Data ss:Type="String">设备名称</Data></Cell><Cell><Data ss:Type="String">关键参数信息</Data></Cell><Cell><Data ss:Type="String">数量</Data></Cell></Row>
+   <Column ss:Width="180"/><Column ss:Width="110"/><Column ss:Width="90"/>
+   <Row ss:StyleID="Header"><Cell><Data ss:Type="String">设备名称</Data></Cell><Cell><Data ss:Type="String">关键参数数量</Data></Cell><Cell><Data ss:Type="String">设备数量</Data></Cell></Row>
    ${rowXml}
   </Table>
   <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><FreezePanes/><FrozenNoSplit/><SplitHorizontal>1</SplitHorizontal><TopRowBottomPane>1</TopRowBottomPane><ActivePane>2</ActivePane></WorksheetOptions>
  </Worksheet>
+ ${detailSheets}
 </Workbook>`;
+}
+
+/** SpreadsheetML 工作表名称最长 31 个字符，且不能包含 Excel 保留字符。 */
+function createWorksheetName(name: string): string {
+  return name.replace(/[\\/?*\[\]:]/g, '／').slice(0, 31) || '设备参数';
 }
 
 function downloadExcel(content: string): void {
