@@ -1,5 +1,6 @@
 import type { IfcEntry, CbmNode, FileDevEntry } from '../gim/types.js';
 import type * as OBCF from '@thatopen/fragments';
+import type * as THREE from 'three';
 
 /** 应用全局状态（由 bootstrap.ts 创建唯一实例，通过参数注入各模块） */
 export class AppState {
@@ -19,6 +20,8 @@ export class AppState {
 
   // 模型
   loadedModels = new Map<string, { modelId: string; visible: boolean }>();
+  // STL/SVC 独立网格模型（不经过 Fragments）
+  loadedMeshModels = new Map<string, { modelId: string; root: THREE.Object3D; visible: boolean }>();
 
   // 高亮
   highlightedItems: OBCF.ModelIdMap | null = null;
@@ -44,6 +47,7 @@ export class AppState {
   reset() {
     this.resetGimState();
     this.loadedModels.clear();
+    this.loadedMeshModels.clear();
     this.highlightedItems = null;
     this.hasFittedCamera = false;
   }

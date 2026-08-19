@@ -27,3 +27,14 @@ export interface FileDevEntry {
   deviceCount: number;
   deviceCbms: string[];
 }
+
+
+/** GIMPKGS 头部解析结果 */
+export interface GimHeaderInfo {
+  fileName: string;
+  fileSize: number;
+  hasGimHeader: boolean;
+  archiveOffset: number;
+  archiveFormat: '7z' | 'ZIP' | '未知';
+  fields: Array<{ key: string; value: string }>;
+}

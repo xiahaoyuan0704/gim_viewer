@@ -14,6 +14,8 @@ import { renderFileDevPanel } from '../ui/fileDevView.js';
 import { loadingEl, emptyTipEl, gimFileInput, btnLoadGim } from '../ui/dom.js';
 import { isDesktopRuntime, toArrayBuffer } from '../desktop/electron.js';
 import { renderNativeGimModel } from '../gim/nativeGimRenderer.js';
+import { extractGimFile, parseGimHeader } from '../gim/gimExtractor.js';
+import { renderGimHeader } from '../ui/gimHeaderView.js';
 
 function showLoading(text: string) { loadingEl.textContent = text; loadingEl.style.display = 'block'; }
 function hideLoading() { loadingEl.style.display = 'none'; }
@@ -24,12 +26,22 @@ function waitForViewerFrame(): Promise<void> {
 }
 
 
+function normalizeModelRef(value: string): string {
+  return value.replace(/\\/g, '/').split('/').pop()!.replace(/\.ifc$/i, '').trim().toLocaleLowerCase('zh-CN');
+}
+
 function getNativeOverlayCbmFiles(state: AppState, selected: IfcEntry[]): Set<string> | undefined {
-  const selectedModelIds = new Set(selected.map((entry) => entry.modelId));
+  const selectedModelIds = new Set(selected.flatMap((entry) => [normalizeModelRef(entry.modelId), normalizeModelRef(entry.name), normalizeModelRef(entry.path)]));
   const cbmFiles = new Set<string>();
   for (const relation of state.fileDevRelations) {
-    if (!selectedModelIds.has(relation.modelId)) continue;
+    const relationRefs = [relation.modelId, relation.ifcName, relation.ifcFile].map(normalizeModelRef);
+    if (!relationRefs.some((ref) => selectedModelIds.has(ref))) continue;
     for (const cbm of relation.deviceCbms) cbmFiles.add(cbm);
+  }
+  if (cbmFiles.size > 0) return cbmFiles;
+  // 少数 GIM 没有 FileDevRelation，或其 IFC 名称与包内文件不一致；回退到所有带 DEV 指针的设备节点，确保电气设备仍能叠加。
+  for (const node of state.cbmNodeIndex.values()) {
+    if (node.devPath) cbmFiles.add(node.path.split('/').pop() || node.path);
   }
   return cbmFiles.size > 0 ? cbmFiles : undefined;
 }
@@ -87,13 +99,39 @@ export async function loadSelectedIfcFiles(ctx: ViewerContext, state: AppState, 
         showLoading('正在叠加 GIM 原生设备细节...');
         ctx.fragments.core.update(true);
         await waitForViewerFrame();
+        // 只叠加当前 IFC 所关联的电气设备，避免把整个 GIM 的 DEV/PHM/MOD 一次性送入 GPU 而掉帧或白屏。
         const overlayCbmFiles = getNativeOverlayCbmFiles(state, selected);
-        // IFC 加载时会记录 Fragments 的 baseCoordinationMatrix；
-        // 原生 CBM/DEV/PHM 叠加时应用同一基准矩阵，避免仍停留在另一套工程坐标而偏到站区外。
-        const nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles, { cbmFiles: overlayCbmFiles, alignToIfc: false, coordinateWithIfc: true });
+        let nativeResult: Awaited<ReturnType<typeof renderNativeGimModel>> = null;
+        if (overlayCbmFiles) {
+          try {
+            nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles, {
+              cbmFiles: overlayCbmFiles,
+              alignToIfc: false,
+              coordinateWithIfc: true,
+            });
+          } catch (error) {
+            console.warn('按 IFC-CBM 关系叠加设备失败，将尝试完整设备树:', error);
+          }
+        }
+        // 线路工程、旧版变电站包可能没有 FileDevRelation，或者其 CBM
+        // 引用方式与当前选中的 IFC 名称不一致。精确叠加没有产出时必须
+        // 回退到包内完整 CBM/DEV 根，而不能静默结束后只留下 IFC。
+        if (!nativeResult) {
+          console.warn('未通过 IFC-CBM 关系找到设备，回退到完整 GIM 原生设备。');
+          try {
+            nativeResult = await renderNativeGimModel(ctx, state, state.currentFiles, {
+              alignToIfc: false,
+              coordinateWithIfc: true,
+            });
+          } catch (error) {
+            console.warn('完整 GIM 原生设备树渲染失败:', error);
+          }
+        }
         if (nativeResult) {
           ctx.fragments.core.update(true);
           await waitForViewerFrame();
+        } else {
+          console.warn('GIM 包内未找到可渲染的 CBM/DEV/PHM/MOD 设备几何。');
         }
       } catch (nativeErr) {
         console.warn('GIM 原生细节渲染失败，继续显示 IFC:', nativeErr);
@@ -120,8 +158,9 @@ export function setupOpenGimService(ctx: ViewerContext, state: AppState, showMes
       const selectedFile = await window.gimDesktop?.openGimFile();
       if (!selectedFile) return;
       showLoading(`正在解压 GIM 文件: ${selectedFile.name}...`);
-      const { extractGimFile } = await import('../gim/gimExtractor.js');
-      const extracted = await extractGimFile(toArrayBuffer(selectedFile.data));
+      const source = toArrayBuffer(selectedFile.data);
+      renderGimHeader(parseGimHeader(source, selectedFile.name));
+      const extracted = await extractGimFile(source);
       const entries = await onGimExtracted(ctx, state, extracted, showMessage);
       if (entries.length === 0) {
         const nativeResult = await renderNativeGimModel(ctx, state, extracted);
@@ -156,9 +195,9 @@ export function setupOpenGimService(ctx: ViewerContext, state: AppState, showMes
     btnLoadGim.disabled = true;
     try {
       showLoading('正在加载 GIM 解压模块...');
-      const { extractGimFile } = await import('../gim/gimExtractor.js');
       showLoading('正在解压 GIM 文件...');
       const ab = await files[0].arrayBuffer();
+      renderGimHeader(parseGimHeader(ab, files[0].name));
       const extracted = await extractGimFile(ab);
       const entries = await onGimExtracted(ctx, state, extracted, showMessage);
       if (entries.length === 0) {
