@@ -200,22 +200,31 @@ async function collectEquipmentContext(
   node: CbmNode,
   files: Map<string, File>,
   textCache: WeakMap<File, Promise<string>>,
-): Promise<{ properties: DefaultProperty[]; matchParts: string[] }> {
+): Promise<{
+  properties: DefaultProperty[];
+  primaryProperties: DefaultProperty[];
+  primaryDev: Record<string, string>;
+  matchParts: string[];
+}> {
   // 第四层级可能只保存组织信息，真正的默认参数位于直属第五层级，
   // 因此分类和明细属性要同时读取设备本身及其所有直属子设备。
   const members = [node, ...node.children];
   const properties: DefaultProperty[] = [];
+  let primaryProperties: DefaultProperty[] = [];
+  let primaryDev: Record<string, string> = {};
   const primaryMatchParts = [node.name, node.classifyName, node.entityName];
   const childMatchParts: string[] = [];
   for (const member of members) {
     const memberProperties = await collectNodeDefaultProperties(member, files, textCache);
     properties.push(...memberProperties);
+    if (member === node) primaryProperties = memberProperties;
     const target = member === node ? primaryMatchParts : childMatchParts;
     target.push(member.name, member.classifyName, member.entityName);
     target.push(...memberProperties.flatMap(({ label, value }) => [label, value]));
     const devFile = resolveFile(files, member.devPath, ['DEV']);
     if (devFile) {
       const dev = parseKeyValue(await getFileText(devFile.file, textCache));
+      if (member === node) primaryDev = dev;
       target.push(dev.SYMBOLNAME || '', dev.TYPE || '');
     }
   }
@@ -231,28 +240,43 @@ async function collectEquipmentContext(
   const matchParts = findElectricalCatalogIndex(primaryMatchParts) === null
     ? [...primaryMatchParts, ...childMatchParts]
     : primaryMatchParts;
-  return { properties: uniqueProperties, matchParts };
+  return { properties: uniqueProperties, primaryProperties, primaryDev, matchParts };
 }
 
 async function buildInventory(state: AppState): Promise<EquipmentInventoryRow[]> {
   const files = state.currentFiles;
   if (!files) return [];
   const textCache = new WeakMap<File, Promise<string>>();
-  const groups = ELECTRICAL_EQUIPMENT_CATALOG.map(({ name }) => ({
-    name,
-    category: name,
-    quantity: 0,
-    subdeviceQuantity: 0,
-    parameters: new Map<string, { count: number; values: Set<string> }>(),
-  }));
+  const groups = new Map<string, {
+    name: string;
+    category: string;
+    quantity: number;
+    subdeviceQuantity: number;
+    parameters: Map<string, { count: number; values: Set<string> }>;
+  }>();
   const nodes = collectDeviceNodes(state.currentCbmTree);
 
   const processNode = async (node: CbmNode): Promise<void> => {
-    const { properties, matchParts } = await collectEquipmentContext(node, files, textCache);
+    const { properties, primaryProperties, primaryDev, matchParts } = await collectEquipmentContext(node, files, textCache);
     matchParts.push(getNodeDisplayName(node, state.ifcGuidToName));
     const catalogIndex = findElectricalCatalogIndex(matchParts);
     if (catalogIndex === null) return;
-    const group = groups[catalogIndex];
+    // 标准目录仅用于判定它是否属于电气设备；Excel 中仍输出第四层级的
+    // 实际工程名称，而不是把名称替换为目录中的标准类别。
+    const propertyName = primaryProperties.find(({ label }) => /^(?:型号|模型|MODEL)$/i.test(label))?.value;
+    const name = propertyName?.trim()
+      || primaryDev.SYMBOLNAME?.trim()
+      || getNodeDisplayName(node, state.ifcGuidToName).trim()
+      || node.name
+      || ELECTRICAL_EQUIPMENT_CATALOG[catalogIndex].name;
+    const propertyCategory = primaryProperties.find(({ label }) => /^(?:类型|类别|CATEGORY|FAMILYNAME)$/i.test(label))?.value;
+    const category = propertyCategory?.trim() || primaryDev.TYPE?.trim() || ELECTRICAL_EQUIPMENT_CATALOG[catalogIndex].name;
+    const groupKey = `${name}\u0000${category}`;
+    let group = groups.get(groupKey);
+    if (!group) {
+      group = { name, category, quantity: 0, subdeviceQuantity: 0, parameters: new Map() };
+      groups.set(groupKey, group);
+    }
     group.quantity += 1;
     // 第四层级节点的直接子节点即第五层级从属子设备。
     group.subdeviceQuantity += node.children.length;
@@ -271,7 +295,7 @@ async function buildInventory(state: AppState): Promise<EquipmentInventoryRow[]>
     await Promise.all(nodes.slice(offset, offset + 100).map(processNode));
   }
 
-  return groups.map((group) => {
+  return Array.from(groups.values()).map((group) => {
     const parameters = Array.from(group.parameters)
       .sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0], 'zh-CN'));
     return {
@@ -285,7 +309,8 @@ async function buildInventory(state: AppState): Promise<EquipmentInventoryRow[]>
         values: Array.from(parameter.values).sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true })),
       })),
     };
-  });
+  }).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true })
+    || a.category.localeCompare(b.category, 'zh-CN', { numeric: true }));
 }
 
 export function getEquipmentInventory(state: AppState): Promise<EquipmentInventoryRow[]> {
