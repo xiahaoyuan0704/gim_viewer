@@ -19,8 +19,85 @@ export interface EquipmentParameterDetail {
 }
 
 type DefaultProperty = { label: string; value: string };
+type CatalogItem = { name: string; aliases?: string[] };
+
+/** 附录 B 的 51 类电气设备；清单只允许输出这些类别。 */
+const ELECTRICAL_EQUIPMENT_CATALOG: CatalogItem[] = [
+  { name: '油浸式变压器' },
+  { name: '干式变压器' },
+  { name: '换流变压器' },
+  { name: '油浸式电抗器' },
+  { name: '干式电抗器' },
+  { name: '电磁式电流互感器', aliases: ['电流互感器'] },
+  { name: '电子式电流互感器' },
+  { name: '电磁式电压互感器' },
+  { name: '电容式电压互感器' },
+  { name: '电子式电压互感器' },
+  { name: '耦合电容器' },
+  { name: '直流电压测量装置' },
+  { name: '组合电器GIS', aliases: ['GIS组合电器', 'GIS设备', 'GIS'] },
+  { name: '组合电器HGIS', aliases: ['HGIS组合电器', 'HGIS设备', 'HGIS'] },
+  { name: '交流滤波器断路器', aliases: ['交流滤波器开关'] },
+  { name: '交流直流断路器', aliases: ['交直流断路器'] },
+  { name: '直流旁路开关' },
+  { name: '直流转换开关' },
+  { name: '交流隔离开关' },
+  { name: '交流接地开关' },
+  { name: '直流隔离开关' },
+  { name: '直流接地开关' },
+  { name: '换流阀' },
+  { name: '消弧线圈-接地变压器成套装置', aliases: ['消弧线圈', '接地变压器成套装置'] },
+  { name: '接地电阻成套装置' },
+  { name: '中性点成套设备', aliases: ['中性点成套装置'] },
+  { name: '隔直装置' },
+  { name: '框架式电容器组' },
+  { name: '集合式电容器组' },
+  { name: '串补电容器成套装置', aliases: ['串联补偿电容器成套装置'] },
+  { name: '降压式SVG' },
+  { name: '直挂式SVG' },
+  { name: 'SVC', aliases: ['静止无功补偿装置', '静止无功补偿器'] },
+  { name: '滤波器电容器' },
+  { name: '直流耦合电容器' },
+  { name: '电阻器' },
+  { name: '高压开关柜', aliases: ['主变柜', '出线柜', '进线柜', '电容器柜', '站用变柜', '10kV柜'] },
+  { name: '低压开关柜' },
+  { name: '熔断器' },
+  { name: '避雷器' },
+  { name: '直流避雷器-滤波避雷器', aliases: ['直流避雷器', '滤波避雷器'] },
+  { name: '交流支柱绝缘子' },
+  { name: '直流支柱绝缘子' },
+  { name: '交流穿墙套管', aliases: ['穿墙套管'] },
+  { name: '直流穿墙套管' },
+  { name: '二次屏柜', aliases: ['保护屏柜', '控制屏柜', '保护屏', '控制屏', 'UPS电源屏', '电源屏'] },
+  { name: '线路故障测量装置' },
+  { name: '蓄电池组' },
+  { name: '预制舱体' },
+  { name: '安防设备' },
+  { name: '火灾报警设备' },
+];
 
 const inventoryCache = new WeakMap<Map<string, File>, Promise<EquipmentInventoryRow[]>>();
+
+function normalizeMatchText(value: string): string {
+  return value.toUpperCase().replace(/[\s_\-—－（）()\/·*:.：，,]/g, '');
+}
+
+/** 名称允许存在电压、厂家、型号等前后缀，以最长命中的标准类别为准。 */
+function findElectricalCatalogIndex(parts: string[]): number | null {
+  const searchable = normalizeMatchText(parts.join(' '));
+  let bestIndex = -1;
+  let bestLength = 0;
+  ELECTRICAL_EQUIPMENT_CATALOG.forEach((item, index) => {
+    for (const candidate of [item.name, ...(item.aliases || [])]) {
+      const token = normalizeMatchText(candidate);
+      if (token && searchable.includes(token) && token.length > bestLength) {
+        bestIndex = index;
+        bestLength = token.length;
+      }
+    }
+  });
+  return bestIndex >= 0 ? bestIndex : null;
+}
 
 function normalizeRef(path: string): string {
   return path.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/?(?:CBM|DEV|FAM)\//i, '').replace(/\$+$/, '').trim();
@@ -119,39 +196,63 @@ async function collectNodeDefaultProperties(node: CbmNode, files: Map<string, Fi
   });
 }
 
+async function collectEquipmentContext(
+  node: CbmNode,
+  files: Map<string, File>,
+  textCache: WeakMap<File, Promise<string>>,
+): Promise<{ properties: DefaultProperty[]; matchParts: string[] }> {
+  // 第四层级可能只保存组织信息，真正的默认参数位于直属第五层级，
+  // 因此分类和明细属性要同时读取设备本身及其所有直属子设备。
+  const members = [node, ...node.children];
+  const properties: DefaultProperty[] = [];
+  const primaryMatchParts = [node.name, node.classifyName, node.entityName];
+  const childMatchParts: string[] = [];
+  for (const member of members) {
+    const memberProperties = await collectNodeDefaultProperties(member, files, textCache);
+    properties.push(...memberProperties);
+    const target = member === node ? primaryMatchParts : childMatchParts;
+    target.push(member.name, member.classifyName, member.entityName);
+    target.push(...memberProperties.flatMap(({ label, value }) => [label, value]));
+    const devFile = resolveFile(files, member.devPath, ['DEV']);
+    if (devFile) {
+      const dev = parseKeyValue(await getFileText(devFile.file, textCache));
+      target.push(dev.SYMBOLNAME || '', dev.TYPE || '');
+    }
+  }
+  const seen = new Set<string>();
+  const uniqueProperties = properties.filter(({ label, value }) => {
+    const key = `${label}\u0000${value}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  // 父设备自身信息优先，只有父级无法识别时才使用第五层级属性补充判断，
+  // 避免某个“电阻器”等子部件反过来改变整台设备的类别。
+  const matchParts = findElectricalCatalogIndex(primaryMatchParts) === null
+    ? [...primaryMatchParts, ...childMatchParts]
+    : primaryMatchParts;
+  return { properties: uniqueProperties, matchParts };
+}
+
 async function buildInventory(state: AppState): Promise<EquipmentInventoryRow[]> {
   const files = state.currentFiles;
   if (!files) return [];
   const textCache = new WeakMap<File, Promise<string>>();
-  const groups = new Map<string, {
-    name: string;
-    category: string;
-    quantity: number;
-    subdeviceQuantity: number;
-    parameters: Map<string, { count: number; values: Set<string> }>;
-  }>();
+  const groups = ELECTRICAL_EQUIPMENT_CATALOG.map(({ name }) => ({
+    name,
+    category: name,
+    quantity: 0,
+    subdeviceQuantity: 0,
+    parameters: new Map<string, { count: number; values: Set<string> }>(),
+  }));
   const nodes = collectDeviceNodes(state.currentCbmTree);
 
   const processNode = async (node: CbmNode): Promise<void> => {
-    const properties = await collectNodeDefaultProperties(node, files, textCache);
-    const devFile = resolveFile(files, node.devPath, ['DEV']);
-    const dev = devFile ? parseKeyValue(await getFileText(devFile.file, textCache)) : {};
-    // 使用层级树设备层对应 FAM“型号/MODEL”作为名称，而不再使用
-    // “设备名称”（如“高压开关柜”）进行模糊归类。
-    const propertyName = properties.find(({ label }) => /^(?:型号|模型|MODEL)$/i.test(label))?.value;
-    const name = propertyName?.trim()
-      || dev.SYMBOLNAME?.trim()
-      || getNodeDisplayName(node, state.ifcGuidToName).trim()
-      || node.name
-      || '未命名设备';
-    const defaultCategory = properties.find(({ label }) => /^(?:类型|类别|CATEGORY|FAMILYNAME)$/i.test(label))?.value;
-    const category = defaultCategory?.trim() || dev.TYPE?.trim() || node.entityName || '未分类';
-    const groupKey = `${name}\u0000${category}`;
-    let group = groups.get(groupKey);
-    if (!group) {
-      group = { name, category, quantity: 0, subdeviceQuantity: 0, parameters: new Map() };
-      groups.set(groupKey, group);
-    }
+    const { properties, matchParts } = await collectEquipmentContext(node, files, textCache);
+    matchParts.push(getNodeDisplayName(node, state.ifcGuidToName));
+    const catalogIndex = findElectricalCatalogIndex(matchParts);
+    if (catalogIndex === null) return;
+    const group = groups[catalogIndex];
     group.quantity += 1;
     // 第四层级节点的直接子节点即第五层级从属子设备。
     group.subdeviceQuantity += node.children.length;
@@ -170,7 +271,7 @@ async function buildInventory(state: AppState): Promise<EquipmentInventoryRow[]>
     await Promise.all(nodes.slice(offset, offset + 100).map(processNode));
   }
 
-  return Array.from(groups.values()).map((group) => {
+  return groups.map((group) => {
     const parameters = Array.from(group.parameters)
       .sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0], 'zh-CN'));
     return {
@@ -184,8 +285,7 @@ async function buildInventory(state: AppState): Promise<EquipmentInventoryRow[]>
         values: Array.from(parameter.values).sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true })),
       })),
     };
-  }).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true })
-    || a.category.localeCompare(b.category, 'zh-CN', { numeric: true }));
+  });
 }
 
 export function getEquipmentInventory(state: AppState): Promise<EquipmentInventoryRow[]> {

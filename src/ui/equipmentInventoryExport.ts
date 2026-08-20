@@ -21,7 +21,9 @@ function createExcelWorkbook(rows: Awaited<ReturnType<typeof getEquipmentInvento
     </Row>`).join('');
   const usedSheetNames = new Set<string>(['设备统计清单']);
   const detailSheets = rows
-    .filter((row) => row.quantity > 0 && row.parameterDetails.length > 0)
+    // 每一种实际匹配到的电气设备都生成独立 Sheet；即使该类设备没有
+    // 可读取的默认参数，也保留工作表，避免导出结果只剩首页。
+    .filter((row) => row.quantity > 0)
     .map((row) => {
       const detailRows = row.parameterDetails.map((parameter) => `
     <Row ss:StyleID="Cell">
