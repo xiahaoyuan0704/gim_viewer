@@ -12,9 +12,7 @@ export function parseFamSections(text: string): Map<string, Map<string, string>>
     const idx = line.indexOf('=');
     if (idx > 0) {
       const key = line.slice(0, idx).trim();
-      let val = line.slice(idx + 1).trim();
-      const eq2 = val.indexOf('=');
-      if (eq2 > 0) val = val.slice(eq2 + 1).trim();
+      const val = line.slice(idx + 1).trim();
       map.set(key, val);
     }
   }

@@ -44,15 +44,75 @@ export function setupPropsDrawer(ctx: ViewerContext): void {
 }
 
 /** 渲染 FAM 分节属性为 HTML */
+function isInternalGimReference(value: string): boolean {
+  const normalized = value.replace(/\$+$/, '').trim();
+  return /\.(?:fam|cbm)$/i.test(normalized);
+}
+
 function renderFamSections(sections: Map<string, Map<string, string>>): string {
   let html = '';
   for (const [secName, props] of sections) {
-    if (props.size === 0) continue;
+    const visibleProps = Array.from(props).filter(([, value]) => !isInternalGimReference(value));
+    if (visibleProps.length === 0) continue;
     html += `<div class="props-section"><div class="props-section-title">${escHtml(secName)}</div><table class="props-table">`;
-    for (const [key, val] of props) { if (val) html += `<tr><td class="prop-key">${escHtml(key)}</td><td class="prop-val">${escHtml(val)}</td></tr>`; }
+    for (const [key, val] of visibleProps) {
+      const separator = val.indexOf('=');
+      const label = separator > 0 ? val.slice(0, separator).trim() : key;
+      const value = separator > 0 ? val.slice(separator + 1).trim() : val;
+      html += `<tr><td class="prop-val" colspan="2">${escHtml(label)}：${escHtml(value || '—')}</td></tr>`;
+    }
     html += '</table></div>';
   }
   return html;
+}
+
+/** 递归读取 FAM 继承链，父族属性先显示、当前族属性后显示。 */
+function resolveGimFile(files: Map<string, File>, path: string, directories: string[]): { path: string; file: File } | null {
+  const normalized = path.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/?(?:CBM|DEV|FAM)\//i, '').replace(/\$+$/, '').trim();
+  const candidates = [path.replace(/\\/g, '/'), ...directories.map((directory) => `${directory}/${normalized}`)];
+  for (const candidate of candidates) {
+    const exact = files.get(candidate);
+    if (exact) return { path: candidate, file: exact };
+    const lower = candidate.toLowerCase();
+    for (const [filePath, file] of files) if (filePath.toLowerCase() === lower) return { path: filePath, file };
+  }
+  const fileName = normalized.split('/').pop()?.toLowerCase();
+  if (!fileName) return null;
+  for (const [filePath, file] of files) if (filePath.split('/').pop()?.toLowerCase() === fileName) return { path: filePath, file };
+  return null;
+}
+
+async function loadFamInheritance(files: Map<string, File>, path: string, directory: 'CBM' | 'DEV', visited = new Set<string>()): Promise<Map<string, Map<string, string>>[]> {
+  const resolved = resolveGimFile(files, path, [directory, 'FAM', 'CBM', 'DEV']);
+  if (!resolved) return [];
+  const fullPath = resolved.path;
+  if (visited.has(fullPath)) return [];
+  visited.add(fullPath);
+  const text = await resolved.file.text();
+  const kv = parseKeyValue(text);
+  const inherited = kv.BASEFAMILY ? await loadFamInheritance(files, kv.BASEFAMILY, directory, visited) : [];
+  return [...inherited, parseFamSections(text)];
+}
+
+async function renderFamInheritanceParts(files: Map<string, File>, path: string, directory: 'CBM' | 'DEV'): Promise<{ defaults: string; remaining: string }> {
+  const chains = await loadFamInheritance(files, path, directory);
+  const defaults: Map<string, Map<string, string>>[] = [];
+  const remaining: Map<string, Map<string, string>>[] = [];
+  for (const sections of chains) {
+    const defaultProps = sections.get('默认');
+    if (defaultProps) defaults.push(new Map([['默认', defaultProps]]));
+    const rest = new Map(Array.from(sections).filter(([name]) => name !== '默认'));
+    if (rest.size > 0) remaining.push(rest);
+  }
+  return {
+    defaults: defaults.map(renderFamSections).join(''),
+    remaining: remaining.map(renderFamSections).join(''),
+  };
+}
+
+async function renderFamInheritance(files: Map<string, File>, path: string, directory: 'CBM' | 'DEV'): Promise<string> {
+  const parts = await renderFamInheritanceParts(files, path, directory);
+  return parts.defaults + parts.remaining;
 }
 
 /** 渲染 getItemsData 返回的属性数据为 HTML */
@@ -113,11 +173,35 @@ function renderIfcItemData(data: Record<string, unknown>, depth = 0): string {
 /** 显示 CbmNode 属性 */
 export async function showNodeProperties(ctx: ViewerContext, state: AppState, node: CbmNode): Promise<void> {
   let html = `<div class="props-header">${escHtml(getNodeDisplayName(node, state.ifcGuidToName))}</div>`;
+  let defaultFamHtml = '';
+  let remainingFamHtml = '';
+  let devProperties: Record<string, string> | null = null;
+  if (state.currentFiles && node.famPath) {
+    const fam = resolveGimFile(state.currentFiles, node.famPath, ['CBM', 'FAM']);
+    if (fam) {
+      const parts = await renderFamInheritanceParts(state.currentFiles, node.famPath, 'CBM');
+      defaultFamHtml += parts.defaults;
+      remainingFamHtml += parts.remaining;
+    }
+  }
+  if (state.currentFiles && node.devPath) {
+    const dev = resolveGimFile(state.currentFiles, node.devPath, ['DEV']);
+    if (dev) {
+      devProperties = parseKeyValue(await dev.file.text());
+      const famRef = devProperties.BASEFAMILY;
+      if (famRef && resolveGimFile(state.currentFiles, famRef, ['DEV', 'FAM'])) {
+        const parts = await renderFamInheritanceParts(state.currentFiles, famRef, 'DEV');
+        defaultFamHtml += parts.defaults;
+        remainingFamHtml += parts.remaining;
+      }
+    }
+  }
+  // “默认”包含最常用的设备设计参数，FAM 渲染器已将其排在首位。
+  html += defaultFamHtml;
   html += '<div class="props-section"><div class="props-section-title">基本信息</div><table class="props-table">';
   const bp: [string, string][] = [
     ['实体类型', node.entityName],
     ['分类名称', node.classifyName],
-    ['CBM 文件', node.path.split('/').pop() || ''],
   ];
   if (node.ifcFile) bp.push(['IFC 文件', node.ifcFile]);
   if (node.ifcGuid) bp.push(['IFC GUID', node.ifcGuid]);
@@ -128,25 +212,25 @@ export async function showNodeProperties(ctx: ViewerContext, state: AppState, no
   for (const [k, v] of bp) { if (v) html += `<tr><td class="prop-key">${k}</td><td class="prop-val">${escHtml(v)}</td></tr>`; }
   html += '</table></div>';
 
-  if (node.famPath && state.currentFiles) {
-    const f = state.currentFiles.get(`CBM/${node.famPath}`);
-    if (f) html += renderFamSections(parseFamSections(await f.text()));
+  if (state.currentFiles) {
+    const cbm = resolveGimFile(state.currentFiles, node.path, ['CBM']);
+    if (cbm) {
+      const allCbmProperties = parseKeyValue(await cbm.file.text());
+      html += '<div class="props-section"><div class="props-section-title">设计信息</div><table class="props-table">';
+      for (const [key, value] of Object.entries(allCbmProperties).filter(([, value]) => !isInternalGimReference(value))) {
+        html += `<tr><td class="prop-key">${escHtml(key)}</td><td class="prop-val">${escHtml(value || '—')}</td></tr>`;
+      }
+      html += '</table></div>';
+    }
   }
 
-  if (node.devPath && state.currentFiles) {
-    const f = state.currentFiles.get(`DEV/${node.devPath}`);
-    if (f) {
-      const kv = parseKeyValue(await f.text());
+  html += remainingFamHtml;
+
+  if (devProperties) {
       html += '<div class="props-section"><div class="props-section-title">设备信息</div><table class="props-table">';
-      if (kv['SYMBOLNAME']) html += `<tr><td class="prop-key">设备名称</td><td class="prop-val">${escHtml(kv['SYMBOLNAME'])}</td></tr>`;
-      if (kv['TYPE']) html += `<tr><td class="prop-key">设备类型</td><td class="prop-val">${escHtml(kv['TYPE'])}</td></tr>`;
+      if (devProperties.SYMBOLNAME) html += `<tr><td class="prop-key">设备名称</td><td class="prop-val">${escHtml(devProperties.SYMBOLNAME)}</td></tr>`;
+      if (devProperties.TYPE) html += `<tr><td class="prop-key">设备类型</td><td class="prop-val">${escHtml(devProperties.TYPE)}</td></tr>`;
       html += '</table></div>';
-      const famRef = kv['BASEFAMILY'];
-      if (famRef) {
-        const famFile = state.currentFiles.get(`DEV/${famRef}`);
-        if (famFile) html += renderFamSections(parseFamSections(await famFile.text()));
-      }
-    }
   }
 
   if (node.transformMatrix && node.transformMatrix !== '1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1') {
@@ -230,17 +314,17 @@ export async function showIfcElementProperties(ctx: ViewerContext, state: AppSta
   if (gimNode) {
     html += '<div class="props-section"><div class="props-section-title">GIM 设备属性</div></div>';
     if (gimNode.famPath && state.currentFiles) {
-      const f = state.currentFiles.get(`CBM/${gimNode.famPath}`);
-      if (f) html += renderFamSections(parseFamSections(await f.text()));
+      const f = resolveGimFile(state.currentFiles, gimNode.famPath, ['CBM', 'FAM']);
+      if (f) html += await renderFamInheritance(state.currentFiles, gimNode.famPath, 'CBM');
     }
     if (gimNode.devPath && state.currentFiles) {
-      const f = state.currentFiles.get(`DEV/${gimNode.devPath}`);
+      const f = resolveGimFile(state.currentFiles, gimNode.devPath, ['DEV']);
       if (f) {
-        const kv = parseKeyValue(await f.text());
+        const kv = parseKeyValue(await f.file.text());
         const famRef = kv['BASEFAMILY'];
         if (famRef) {
-          const famFile = state.currentFiles.get(`DEV/${famRef}`);
-          if (famFile) html += renderFamSections(parseFamSections(await famFile.text()));
+          const famFile = resolveGimFile(state.currentFiles, famRef, ['DEV', 'FAM']);
+          if (famFile) html += await renderFamInheritance(state.currentFiles, famRef, 'DEV');
         }
       }
     }

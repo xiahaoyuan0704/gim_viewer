@@ -3,6 +3,7 @@ import type { ViewerContext } from '../viewer/viewerEngine.js';
 import type { ModelEventCallbacks } from '../viewer/ifcLoader.js';
 import { ensureEngineReady, loadIfcBuffer } from '../viewer/ifcLoader.js';
 import { fitCameraToScene } from '../viewer/camera.js';
+import { loadMeshBuffer } from '../viewer/meshLoader.js';
 import { loadingEl, emptyTipEl, fileInput, btnLoadLocal } from '../ui/dom.js';
 
 function showLoading(text: string) { loadingEl.textContent = text; loadingEl.style.display = 'block'; }
@@ -19,15 +20,19 @@ export function setupOpenIfcService(ctx: ViewerContext, state: AppState, modelCa
       await ensureEngineReady(ctx, state, modelCallbacks);
       for (const file of files) {
         showLoading(`正在加载 ${file.name}...`);
-        const buffer = new Uint8Array(await file.arrayBuffer());
-        const name = file.name.replace(/\.ifc$/i, '');
-        await loadIfcBuffer(ctx, name, buffer, state, (p) => showLoading(`${file.name}: ${Math.round(p * 100)}%`));
+        const buffer = await file.arrayBuffer();
+        const name = file.name.replace(/\.(ifc|stl|svc)$/i, '');
+        if (/\.ifc$/i.test(file.name)) {
+          await loadIfcBuffer(ctx, name, new Uint8Array(buffer), state, (p) => showLoading(`${file.name}: ${Math.round(p * 100)}%`));
+        } else {
+          loadMeshBuffer(ctx, state, name, buffer);
+        }
       }
       emptyTipEl.style.display = 'none';
       fitCameraToScene(ctx, state);
     } catch (err) {
       console.error(err);
-      showLoading(`IFC 加载失败: ${err instanceof Error ? err.message : String(err)}`);
+      showLoading(`模型加载失败: ${err instanceof Error ? err.message : String(err)}`);
       setTimeout(hideLoading, 3000);
     } finally { fileInput.value = ''; btnLoadLocal.disabled = false; hideLoading(); }
   });

@@ -3,13 +3,18 @@ import { createViewerEngine } from '../viewer/viewerEngine.js';
 import { ensureEngineReady } from '../viewer/ifcLoader.js';
 import { setupSelection } from '../viewer/selection.js';
 import { setupTabs } from '../ui/tabs.js';
-import { setupPropsDrawer, showIfcElementProperties } from '../ui/propsDrawer.js';
+import { setupPropsDrawer, showIfcElementProperties, showNodeProperties, openPropsDrawer } from '../ui/propsDrawer.js';
 import { addModelToUI, removeModelFromUI } from '../ui/modelList.js';
 import { setupIfcSelectModal } from '../ui/ifcSelectModal.js';
+import { setupProjectScaleModal } from '../ui/projectScaleModal.js';
+import { setupEquipmentInventoryExport } from '../ui/equipmentInventoryExport.js';
+import { setupViewportActions } from '../ui/viewportActions.js';
 import { setupOpenGimService, loadSelectedIfcFiles } from '../services/openGimService.js';
 import { setupOpenIfcService } from '../services/openIfcService.js';
 import { resetHighlight } from '../viewer/highlight.js';
+import { clearMeshModels } from '../viewer/meshLoader.js';
 import { removePreviousNativeRoot } from '../gim/nativeGimRenderer.js';
+import { clearGimHeader } from '../ui/gimHeaderView.js';
 import { container, btnClear, loadingEl } from '../ui/dom.js';
 import type { ModelEventCallbacks } from '../viewer/ifcLoader.js';
 
@@ -36,8 +41,14 @@ async function bootstrapAsync(): Promise<void> {
   setupIfcSelectModal({
     onLoadSelected: () => loadSelectedIfcFiles(ctx, state, modelCallbacks),
   });
+  setupProjectScaleModal(state);
+  setupEquipmentInventoryExport(state);
+  setupViewportActions(ctx, state);
   setupSelection(ctx, state, container, (modelId, localId) => {
     showIfcElementProperties(ctx, state, modelId, localId);
+  }, (node) => {
+    void showNodeProperties(ctx, state, node);
+    openPropsDrawer(ctx);
   });
   setupOpenGimService(ctx, state, (text) => showLoading(text));
   setupOpenIfcService(ctx, state, modelCallbacks);
@@ -48,10 +59,12 @@ async function bootstrapAsync(): Promise<void> {
       ctx.fragments.core.disposeModel(modelId);
     }
     removePreviousNativeRoot(ctx);
+    clearMeshModels(state);
     state.reset();
     document.getElementById('model-list')!.innerHTML = '';
     document.getElementById('cbm-tree-panel')!.innerHTML = '';
     document.getElementById('file-dev-panel')!.innerHTML = '';
+    clearGimHeader();
     document.getElementById('props-drawer-body')!.innerHTML = '<div class="props-empty">选择层级树节点查看属性</div>';
     document.getElementById('empty-tip')!.style.display = '';
     await resetHighlight(ctx, state);

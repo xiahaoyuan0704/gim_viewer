@@ -1,12 +1,16 @@
 import * as THREE from 'three';
+import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import type { ViewerContext } from '../viewer/viewerEngine.js';
 import type { AppState } from '../app/state.js';
 import type { CbmNode } from './types.js';
 import { parseKeyValue } from './cbmParser.js';
 import { fitCameraToScene } from '../viewer/camera.js';
+import { addModelToUI } from '../ui/modelList.js';
 
 const ROOT_NAME = 'GIM_NATIVE_ROOT';
+const NATIVE_MODEL_ID = 'GIM 原生电气设备';
 const UNIT_SCALE = 0.001; // GIM MOD/PHM/DEV 坐标通常为 mm，Three 场景中按 m 显示。
+const MAX_MERGE_VERTICES = 120_000; // 分 CBM 控制合并峰值，同时显著减少最终 GPU draw call。
 
 interface NativeStats {
   cbmCount: number;
@@ -43,7 +47,13 @@ function buildPathIndex(files: Map<string, File>): Map<string, string> {
 }
 
 function normalizeRef(ref: string): string {
-  return ref.replace(/\\/g, '/').replace(/^\.\//, '').trim();
+  return ref
+    .replace(/\0/g, '')
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '')
+    .trim()
+    .replace(/^["']+|["'$]+$/g, '')
+    .trim();
 }
 
 function resolveFilePath(ctx: RenderContext, ref: string, preferredDirs: string[]): string | null {
@@ -95,23 +105,39 @@ function parseOrderedRefs(text: string, sectionKey: string, refPattern: RegExp, 
   let cursor = start + 1;
   for (let i = 0; i < count && cursor < lines.length; i++) {
     const refLine = lines[cursor++];
-    if (!refLine || !refPattern.test(refLine.key)) break;
+    if (!refLine || !refPattern.test(refLine.key)) return [];
     const item: OrderedRef = { ref: refLine.value };
     for (let step = 1; step < tupleSize && cursor < lines.length; step++) {
       const line = lines[cursor++];
       if (/^TRANSFORMMATRIX/i.test(line.key)) item.matrix = line.value;
       else if (/^COLOR/i.test(line.key)) item.color = line.value;
+      else return [];
     }
     refs.push(item);
   }
-  return refs;
+  // Indexed exports place all SOLIDMODEL keys independently and are parsed by
+  // parseIndexedRefs. Only accept this path for a complete interleaved table;
+  // a partial match used to silently discard most device models.
+  return refs.length === count ? refs : [];
 }
 
 function parseIndexedRefs(kv: Record<string, string>, sectionKey: string, refKey: string, includeColor = false): OrderedRef[] {
   const count = Number(kv[sectionKey] || 0);
-  if (!Number.isFinite(count) || count <= 0) return [];
+  // Exporters are not consistent about NUM, zero/one-based indices, or the
+  // singular/plural spelling of SOLIDMODEL(S)/SUBDEVICE(S). Discover the
+  // actual reference keys first instead of trusting NUM exclusively.
+  const escaped = refKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const keyPattern = new RegExp(`^${escaped}S?(\\d+)$`, 'i');
+  const indices = Object.keys(kv)
+    .map((key) => key.match(keyPattern))
+    .filter((match): match is RegExpMatchArray => Boolean(match))
+    .map((match) => Number(match[1]))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+  if (indices.length === 0 && (!Number.isFinite(count) || count <= 0)) return [];
+  const actualIndices = indices.length > 0 ? Array.from(new Set(indices)) : Array.from({ length: count }, (_, i) => i);
   const refs: OrderedRef[] = [];
-  for (let i = 0; i < count; i++) {
+  for (const i of actualIndices) {
     const ref = kv[`${refKey}${i}`] || kv[`${refKey}S${i}`];
     if (!ref) continue;
     refs.push({ ref, matrix: kv[`TRANSFORMMATRIX${i}`], color: includeColor ? kv[`COLOR${i}`] : undefined });
@@ -175,6 +201,19 @@ function makeMaterial(color: THREE.Color, opacity = 1): THREE.MeshStandardMateri
     opacity,
     side: THREE.DoubleSide,
   });
+}
+
+function isRenderableGeometry(geometry: THREE.BufferGeometry): boolean {
+  const position = geometry.getAttribute('position');
+  if (!position || position.count === 0) return false;
+  const array = position.array;
+  for (let i = 0; i < array.length; i++) {
+    const value = Number(array[i]);
+    // Reject NaN/Infinity and corrupt coordinates before they reach WebGL.
+    // GIM uses millimetres; 1e9 mm is already far beyond a valid station.
+    if (!Number.isFinite(value) || Math.abs(value) > 1e9) return false;
+  }
+  return true;
 }
 
 function createStretchedBody(el: Element): THREE.BufferGeometry {
@@ -327,7 +366,14 @@ function collectWirePoints(el: Element): THREE.Vector3[] {
   const points: THREE.Vector3[] = [];
   pushUniquePoint(points, parseVector(el.getAttribute('StartCoord') || el.getAttribute('Start') || el.getAttribute('BeginCoord') || ''));
 
-  for (const attrName of ['Array', 'Points', 'PointArray', 'Path', 'Route', 'Coords', 'Coordinates', 'ControlPoints', 'MiddleCoords']) {
+  // CurveCable/Wire exporters use different names for the same ordered path.
+  // Keep the file order: the first/last coordinates are the terminals and the
+  // fit/control coordinates describe the cable between them.
+  for (const attrName of [
+    'CurveControlCoordArray', 'FitCoordArray', 'ControlCoordArray',
+    'Array', 'Points', 'PointArray', 'Path', 'Route', 'Coords',
+    'Coordinates', 'ControlPoints', 'MiddleCoords',
+  ]) {
     for (const point of parseVectorList(el.getAttribute(attrName) || '')) pushUniquePoint(points, point);
   }
 
@@ -431,6 +477,45 @@ function mergeBufferGeometries(geometries: THREE.BufferGeometry[]): THREE.Buffer
   return merged;
 }
 
+function createTableGeometry(el: Element): THREE.BufferGeometry {
+  const tl1 = Number(el.getAttribute('TL1') || 1); const tl2 = Number(el.getAttribute('TL2') || tl1);
+  const ll1 = Number(el.getAttribute('LL1') || tl1); const ll2 = Number(el.getAttribute('LL2') || tl2); const h = Number(el.getAttribute('H') || 1);
+  const bottom = [new THREE.Vector2(-ll1 / 2, -ll2 / 2), new THREE.Vector2(ll1 / 2, -ll2 / 2), new THREE.Vector2(ll1 / 2, ll2 / 2), new THREE.Vector2(-ll1 / 2, ll2 / 2)];
+  const top = [new THREE.Vector2(-tl1 / 2, -tl2 / 2), new THREE.Vector2(tl1 / 2, -tl2 / 2), new THREE.Vector2(tl1 / 2, tl2 / 2), new THREE.Vector2(-tl1 / 2, tl2 / 2)];
+  const positions: number[] = []; for (const p of bottom) positions.push(p.x, p.y, 0); for (const p of top) positions.push(p.x, p.y, h);
+  const indices = [0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 1, 5, 6, 1, 6, 2, 2, 6, 7, 2, 7, 3, 3, 7, 4, 3, 4, 0];
+  const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); geometry.setIndex(indices); geometry.computeVertexNormals(); return geometry;
+}
+
+function createOffsetRectangularTable(el: Element): THREE.BufferGeometry {
+  const tl = Number(el.getAttribute('TL') || 1); const tw = Number(el.getAttribute('TW') || 1);
+  const ll = Number(el.getAttribute('LL') || tl); const lw = Number(el.getAttribute('LW') || tw); const h = Number(el.getAttribute('H') || 1);
+  const x = Number(el.getAttribute('XOFF') || 0); const y = Number(el.getAttribute('YOFF') || 0);
+  const bottom = [new THREE.Vector2(-ll / 2, -lw / 2), new THREE.Vector2(ll / 2, -lw / 2), new THREE.Vector2(ll / 2, lw / 2), new THREE.Vector2(-ll / 2, lw / 2)];
+  const top = [new THREE.Vector2(x - tl / 2, y - tw / 2), new THREE.Vector2(x + tl / 2, y - tw / 2), new THREE.Vector2(x + tl / 2, y + tw / 2), new THREE.Vector2(x - tl / 2, y + tw / 2)];
+  const positions: number[] = []; for (const p of bottom) positions.push(p.x, p.y, 0); for (const p of top) positions.push(p.x, p.y, h);
+  const indices = [0,1,2,0,2,3,4,6,5,4,7,6,0,4,5,0,5,1,1,5,6,1,6,2,2,6,7,2,7,3,3,7,4,3,4,0];
+  const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); geometry.setIndex(indices); geometry.computeVertexNormals(); return geometry;
+}
+
+function createEccentricCone(el: Element): THREE.BufferGeometry {
+  const tr = Number(el.getAttribute('TR') || 1); const br = Number(el.getAttribute('BR') || 1); const h = Number(el.getAttribute('H') || 1);
+  const xoff = Number(el.getAttribute('TOPXOFF') || 0); const yoff = Number(el.getAttribute('TOPYOFF') || 0);
+  const geometry = makeZAxisCylinder(tr, br, h, 32);
+  const positions = geometry.getAttribute('position') as THREE.BufferAttribute;
+  for (let i = 0; i < positions.count; i++) { const z = positions.getZ(i); const ratio = h ? z / h : 0; positions.setX(i, positions.getX(i) + xoff * ratio); positions.setY(i, positions.getY(i) + yoff * ratio); }
+  positions.needsUpdate = true; geometry.computeVertexNormals(); return geometry;
+}
+
+function createRectangularRing(el: Element): THREE.BufferGeometry {
+  const l = Number(el.getAttribute('L') || 1); const w = Number(el.getAttribute('W') || 1); const r = Math.min(Number(el.getAttribute('R') || 0), l / 2, w / 2);
+  const dr = Number(el.getAttribute('DR') || 1); const h = Number(el.getAttribute('H') || dr);
+  const shape = new THREE.Shape(); const outer = new THREE.Path();
+  const rounded = (path: THREE.Path, hw: number, hh: number, radius: number) => { path.moveTo(-hw + radius, -hh); path.lineTo(hw - radius, -hh); path.quadraticCurveTo(hw, -hh, hw, -hh + radius); path.lineTo(hw, hh - radius); path.quadraticCurveTo(hw, hh, hw - radius, hh); path.lineTo(-hw + radius, hh); path.quadraticCurveTo(-hw, hh, -hw, hh - radius); path.lineTo(-hw, -hh + radius); path.quadraticCurveTo(-hw, -hh, -hw + radius, -hh); };
+  rounded(outer, l / 2, w / 2, r); shape.copy(outer); const hole = new THREE.Path(); rounded(hole, Math.max(0.01, l / 2 - dr), Math.max(0.01, w / 2 - dr), Math.max(0, r - dr)); shape.holes.push(hole);
+  return new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false });
+}
+
 function createGeometry(entity: Element): THREE.BufferGeometry | null {
   const cuboid = entity.querySelector('Cuboid');
   if (cuboid) return makeZAxisBox(Number(cuboid.getAttribute('L') || 1), Number(cuboid.getAttribute('W') || 1), Number(cuboid.getAttribute('H') || 1));
@@ -438,13 +523,15 @@ function createGeometry(entity: Element): THREE.BufferGeometry | null {
   if (cylinder) return makeZAxisCylinder(Number(cylinder.getAttribute('R') || 1), Number(cylinder.getAttribute('R') || 1), Number(cylinder.getAttribute('H') || 1));
   const truncatedCone = entity.querySelector('TruncatedCone');
   if (truncatedCone) return makeZAxisCylinder(Number(truncatedCone.getAttribute('TR') || 1), Number(truncatedCone.getAttribute('BR') || 1), Number(truncatedCone.getAttribute('H') || 1));
+  const eccentricCone = entity.querySelector('EccentricTruncatedCone');
+  if (eccentricCone) return createEccentricCone(eccentricCone);
   const porcelain = entity.querySelector('PorcelainBushing');
   if (porcelain) return createPorcelainBushing(porcelain);
   const stretched = entity.querySelector('StretchedBody');
   if (stretched) return createStretchedBody(stretched);
   const ring = entity.querySelector('Ring');
   if (ring) {
-    const geometry = new THREE.TorusGeometry(Number(ring.getAttribute('R') || 1) + Number(ring.getAttribute('DR') || 0.2), Number(ring.getAttribute('DR') || 0.2), 16, 48, Number(ring.getAttribute('Rad') || Math.PI * 2));
+    const geometry = new THREE.TorusGeometry(Number(ring.getAttribute('R') || 1), Number(ring.getAttribute('DR') || 0.2) / 2, 16, 48, Number(ring.getAttribute('Rad') || Math.PI * 2));
     geometry.rotateX(Math.PI / 2);
     return geometry;
   }
@@ -458,6 +545,8 @@ function createGeometry(entity: Element): THREE.BufferGeometry | null {
     geometry.scale(Number(ellipsoid.getAttribute('LR') || ellipsoid.getAttribute('R') || 1), Number(ellipsoid.getAttribute('WR') || ellipsoid.getAttribute('R') || 1), Number(ellipsoid.getAttribute('H') || ellipsoid.getAttribute('HR') || 1));
     return geometry;
   }
+  const rectangularRing = entity.querySelector('RectangularRing');
+  if (rectangularRing) return createRectangularRing(rectangularRing);
   const tube = entity.querySelector('RoundSteelTube');
   if (tube) return makeZAxisCylinder(Number(tube.getAttribute('R') || tube.getAttribute('BR') || 1), Number(tube.getAttribute('R') || tube.getAttribute('BR') || 1), Number(tube.getAttribute('H') || tube.getAttribute('L') || 1));
   const flat = entity.querySelector('FlatSteel');
@@ -465,8 +554,10 @@ function createGeometry(entity: Element): THREE.BufferGeometry | null {
   const terminal = entity.querySelector('TerminalBlock');
   if (terminal) return makeZAxisBox(Number(terminal.getAttribute('L') || 1), Number(terminal.getAttribute('W') || 1), Number(terminal.getAttribute('T') || 1));
   const offsetTable = entity.querySelector('OffsetRectangularTable');
-  if (offsetTable) return makeZAxisBox(Number(offsetTable.getAttribute('L') || 1), Number(offsetTable.getAttribute('W') || 1), Number(offsetTable.getAttribute('H') || offsetTable.getAttribute('T') || 1));
-  const wire = entity.querySelector('Wire');
+  if (offsetTable) return createOffsetRectangularTable(offsetTable);
+  const table = entity.querySelector('Table');
+  if (table) return createTableGeometry(table);
+  const wire = entity.querySelector('Wire, CurveCable');
   if (wire) return createWireGeometry(wire);
   const insulator = entity.querySelector('Insulator');
   if (insulator) return createInsulatorGeometry(insulator);
@@ -545,17 +636,32 @@ async function renderMod(ctx: RenderContext, path: string, parent: THREE.Object3
       continue;
     }
 
-    const geometry = createGeometry(entity);
-    if (!geometry) continue;
-    const colorEl = entity.querySelector('Color');
-    const material = makeMaterial(parseColor(colorEl, inheritedColor), parseOpacity(colorEl));
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = `${path}#${id}`;
-    mesh.applyMatrix4(parseMatrix(entity.querySelector('TransformMatrix')?.getAttribute('Value') || ''));
-    meshByEntityId.set(id, mesh);
-    if (!visible) continue;
-    parent.add(mesh);
-    ctx.stats.meshCount += 1;
+    try {
+      const geometry = createGeometry(entity);
+      if (!geometry) continue;
+      if (!isRenderableGeometry(geometry)) {
+        geometry.dispose();
+        console.warn(`跳过坐标无效的 MOD 图元 (${path}#${id})`);
+        continue;
+      }
+      const colorEl = entity.querySelector('Color');
+      const material = makeMaterial(parseColor(colorEl, inheritedColor), parseOpacity(colorEl));
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.name = `${path}#${id}`;
+      // GIM Wire/CurveCable 端点和拟合点保存的是工程坐标；它们已经包含
+      // 设备定位，不能再叠加 Entity 矩阵，否则整段导线会产生二次偏移。
+      if (!entity.querySelector('Wire, CurveCable')) {
+        mesh.applyMatrix4(parseMatrix(entity.querySelector('TransformMatrix')?.getAttribute('Value') || ''));
+      }
+      meshByEntityId.set(id, mesh);
+      if (!visible) continue;
+      parent.add(mesh);
+      ctx.stats.meshCount += 1;
+    } catch (error) {
+      // A single malformed/unsupported primitive must not discard thousands
+      // of valid electrical meshes already parsed from a large GIM package.
+      console.warn(`跳过无法解析的 MOD 图元 (${path}#${id}):`, error);
+    }
   }
 
   const unresolved = new Set(pendingBooleans.map((item) => item.id));
@@ -564,7 +670,13 @@ async function renderMod(ctx: RenderContext, path: string, parent: THREE.Object3
     progressed = false;
     for (const item of pendingBooleans) {
       if (!unresolved.has(item.id)) continue;
-      const mesh = resolveBooleanMesh(item, meshByEntityId, `${path}#${item.id}`);
+      let mesh: THREE.Mesh | null = null;
+      try {
+        mesh = resolveBooleanMesh(item, meshByEntityId, `${path}#${item.id}`);
+      } catch (error) {
+        console.warn(`跳过无法解析的布尔图元 (${path}#${item.id}):`, error);
+        unresolved.delete(item.id);
+      }
       if (!mesh) continue;
       meshByEntityId.set(item.id, mesh);
       unresolved.delete(item.id);
@@ -577,6 +689,26 @@ async function renderMod(ctx: RenderContext, path: string, parent: THREE.Object3
   }
 }
 
+
+async function renderStl(ctx: RenderContext, path: string, parent: THREE.Object3D, color?: string): Promise<void> {
+  const file = ctx.files.get(path);
+  if (!file) return;
+  try {
+    const geometry = new STLLoader().parse(await file.arrayBuffer());
+    if (!isRenderableGeometry(geometry)) {
+      geometry.dispose();
+      console.warn(`跳过坐标无效的 STL/SVC 模型 (${path})`);
+      return;
+    }
+    geometry.computeVertexNormals();
+    const mesh = new THREE.Mesh(geometry, makeMaterial(parseColor(null, color)));
+    mesh.name = path;
+    parent.add(mesh);
+    ctx.stats.meshCount += 1;
+  } catch (error) {
+    console.warn(`STL 解析失败 (${path}):`, error);
+  }
+}
 
 async function renderPhm(ctx: RenderContext, path: string, parent: THREE.Object3D): Promise<void> {
   if (ctx.visitingPhm.has(path)) return;
@@ -593,14 +725,19 @@ async function renderPhm(ctx: RenderContext, path: string, parent: THREE.Object3
   const modelRefs = refs.length > 0 ? refs : parseIndexedRefs(kv, 'SOLIDMODELS.NUM', 'SOLIDMODEL', true);
   for (const item of modelRefs) {
     const ref = item.ref;
-    const childPath = resolveFilePath(ctx, ref, ['MOD', 'PHM']);
+    const childPath = resolveFilePath(ctx, ref, ['MOD', 'PHM', 'DEV']);
     if (!childPath) continue;
     const child = new THREE.Group();
     child.name = ref;
     child.applyMatrix4(parseMatrix(item.matrix));
     group.add(child);
-    if (/\.mod$/i.test(childPath)) await renderMod(ctx, childPath, child, item.color);
-    else if (/\.phm$/i.test(childPath)) await renderPhm(ctx, childPath, child);
+    try {
+      if (/\.mod$/i.test(childPath)) await renderMod(ctx, childPath, child, item.color);
+      else if (/\.phm$/i.test(childPath)) await renderPhm(ctx, childPath, child);
+      else if (/\.(?:stl|svc)$/i.test(childPath)) await renderStl(ctx, childPath, child, item.color);
+    } catch (error) {
+      console.warn(`跳过无法解析的 PHM 子模型 (${childPath}):`, error);
+    }
   }
   ctx.visitingPhm.delete(path);
 }
@@ -622,14 +759,19 @@ async function renderDev(ctx: RenderContext, path: string, parent: THREE.Object3
   const solidRefs = orderedSolidRefs.length > 0 ? orderedSolidRefs : parseIndexedRefs(kv, 'SOLIDMODELS.NUM', 'SOLIDMODEL');
   for (const item of solidRefs) {
     const ref = item.ref;
-    const phmPath = resolveFilePath(ctx, ref, ['PHM', 'MOD']);
+    const phmPath = resolveFilePath(ctx, ref, ['PHM', 'MOD', 'DEV']);
     if (!phmPath) continue;
     const child = new THREE.Group();
     child.name = ref;
     child.applyMatrix4(parseMatrix(item.matrix));
     group.add(child);
-    if (/\.phm$/i.test(phmPath)) await renderPhm(ctx, phmPath, child);
-    else if (/\.mod$/i.test(phmPath)) await renderMod(ctx, phmPath, child);
+    try {
+      if (/\.phm$/i.test(phmPath)) await renderPhm(ctx, phmPath, child);
+      else if (/\.mod$/i.test(phmPath)) await renderMod(ctx, phmPath, child);
+      else if (/\.(?:stl|svc)$/i.test(phmPath)) await renderStl(ctx, phmPath, child);
+    } catch (error) {
+      console.warn(`跳过无法解析的 DEV 实体模型 (${phmPath}):`, error);
+    }
   }
 
   const orderedSubRefs = parseOrderedRefs(text, 'SUBDEVICES.NUM', /^SUBDEVICES?/i, 2);
@@ -637,7 +779,13 @@ async function renderDev(ctx: RenderContext, path: string, parent: THREE.Object3
   for (const item of subRefs) {
     const ref = item.ref;
     const devPath = resolveFilePath(ctx, ref, ['DEV']);
-    if (devPath) await renderDev(ctx, devPath, group, parseMatrix(item.matrix));
+    if (devPath) {
+      try {
+        await renderDev(ctx, devPath, group, parseMatrix(item.matrix));
+      } catch (error) {
+        console.warn(`跳过无法解析的 DEV 子设备 (${devPath}):`, error);
+      }
+    }
   }
   ctx.visitingDev.delete(path);
 }
@@ -663,19 +811,22 @@ async function renderCbm(ctx: RenderContext, path: string, parent: THREE.Object3
   if (devPath) await renderDev(ctx, devPath, group);
 
   const singleSubsystem = kv.SUBSYSTEM ? resolveFilePath(ctx, kv.SUBSYSTEM, ['CBM']) : null;
-  if (singleSubsystem) await renderCbm(ctx, singleSubsystem, group, visited);
+  // CBM TRANSFORMMATRIX is expressed in the project coordinate system. Keep
+  // logical descendants beside their parent in the Three.js scene so their
+  // absolute matrices are not multiplied by ancestor placement matrices.
+  if (singleSubsystem) await renderCbm(ctx, singleSubsystem, parent, visited);
 
-  const subsystemCount = Number(kv['SUBSYSTEMS.NUM'] || 0);
-  for (let i = 0; i < subsystemCount; i++) {
-    const ref = kv[`SUBSYSTEM${i}`];
-    const childPath = ref ? resolveFilePath(ctx, ref, ['CBM']) : null;
-    if (childPath) await renderCbm(ctx, childPath, group, visited);
+  const subsystemRefs = parseIndexedRefs(kv, 'SUBSYSTEMS.NUM', 'SUBSYSTEM');
+  for (const item of subsystemRefs) {
+    const childPath = resolveFilePath(ctx, item.ref, ['CBM']);
+    if (childPath) await renderCbm(ctx, childPath, parent, visited);
   }
 
-  const subdeviceCount = Number(kv['SUBDEVICES.NUM'] || 0);
-  for (let i = 0; i < subdeviceCount; i++) {
-    const ref = kv[`SUBDEVICE${i}`] || kv[`SUBDEVICES${i}`];
-    const childPath = ref ? resolveFilePath(ctx, ref, ['CBM']) : null;
+  const subdeviceRefs = parseIndexedRefs(kv, 'SUBDEVICES.NUM', 'SUBDEVICE');
+  for (const item of subdeviceRefs) {
+    const childPath = resolveFilePath(ctx, item.ref, ['CBM']);
+    // SUBDEVICE placement is local to its owning device, unlike the absolute
+    // project/system SUBSYSTEM placement above.
     if (childPath) await renderCbm(ctx, childPath, group, visited);
   }
 }
@@ -683,9 +834,13 @@ async function renderCbm(ctx: RenderContext, path: string, parent: THREE.Object3
 async function renderFromCbmIfPossible(ctx: RenderContext, parent: THREE.Object3D, options: NativeGimRenderOptions = {}): Promise<boolean> {
   const before = ctx.stats.meshCount;
   if (options.cbmFiles && options.cbmFiles.size > 0) {
+    // CBM placement matrices in GIM are project-absolute, not parent-relative.
+    // Render selected device nodes as roots; nesting them below project/system
+    // nodes would multiply absolute matrices and lift/offset entire devices.
+    const visited = new Set<string>();
     for (const ref of options.cbmFiles) {
       const cbmPath = resolveFilePath(ctx, ref, ['CBM']);
-      if (cbmPath) await renderCbm(ctx, cbmPath, parent, new Set<string>());
+      if (cbmPath) await renderCbm(ctx, cbmPath, parent, visited);
     }
     return ctx.stats.meshCount > before;
   }
@@ -721,41 +876,47 @@ async function pickRootDevFiles(files: Map<string, File>, devFiles: string[]): P
 
 function getMaterialKey(material: THREE.Material): string {
   const mat = material as THREE.MeshStandardMaterial;
-  const color = mat.color ? mat.color.getHexString() : 'none';
-  return [material.type, color, mat.opacity ?? 1, mat.transparent ? 1 : 0, mat.side].join('|');
+  return [material.type, mat.color?.getHexString() || 'none', mat.opacity ?? 1, mat.transparent ? 1 : 0, mat.side].join('|');
 }
 
-function optimizeNativeRoot(root: THREE.Group): void {
-  root.updateMatrixWorld(true);
-  const inverseRoot = root.matrixWorld.clone().invert();
+/** 合并同一 CBM 节点的非层级网格，保留 cbmPath 供设备拾取和属性查询。 */
+function optimizeCbmGroup(group: THREE.Object3D): void {
+  for (const child of group.children) if (child.userData.cbmPath) optimizeCbmGroup(child);
+  let vertexCount = 0;
+  for (const child of group.children) {
+    if (child.userData.cbmPath) continue;
+    child.traverse((object) => { if (object instanceof THREE.Mesh) vertexCount += object.geometry.getAttribute('position')?.count || 0; });
+  }
+  // 原始网格已可正确显示时，宁可保留较多 draw call，也不能为合并复制超大几何而触发白屏。
+  if (vertexCount > MAX_MERGE_VERTICES) return;
+  group.updateMatrixWorld(true);
+  const inverse = group.matrixWorld.clone().invert();
   const buckets = new Map<string, { material: THREE.Material; geometries: THREE.BufferGeometry[] }>();
-  const originals: THREE.Mesh[] = [];
-
-  root.traverse((obj) => {
-    if (!(obj instanceof THREE.Mesh) || !(obj.geometry instanceof THREE.BufferGeometry)) return;
-    originals.push(obj);
-    const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
-    const material = materials[0];
-    const key = getMaterialKey(material);
-    if (!buckets.has(key)) buckets.set(key, { material, geometries: [] });
-    const geometry = obj.geometry.clone();
-    geometry.applyMatrix4(inverseRoot.clone().multiply(obj.matrixWorld));
-    buckets.get(key)!.geometries.push(geometry);
-  });
-
-  if (originals.length < 2) return;
-  root.clear();
-  for (const mesh of originals) mesh.geometry.dispose();
+  const disposable: THREE.BufferGeometry[] = [];
+  for (const child of [...group.children]) {
+    if (child.userData.cbmPath) continue;
+    child.traverse((object) => {
+      if (!(object instanceof THREE.Mesh) || !(object.geometry instanceof THREE.BufferGeometry)) return;
+      const material = Array.isArray(object.material) ? object.material[0] : object.material;
+      const key = getMaterialKey(material);
+      if (!buckets.has(key)) buckets.set(key, { material, geometries: [] });
+      const geometry = object.geometry.clone();
+      geometry.applyMatrix4(inverse.clone().multiply(object.matrixWorld));
+      buckets.get(key)!.geometries.push(geometry);
+      disposable.push(object.geometry);
+    });
+    group.remove(child);
+  }
+  for (const geometry of disposable) geometry.dispose();
   for (const { material, geometries } of buckets.values()) {
     const merged = mergeBufferGeometries(geometries);
     for (const geometry of geometries) geometry.dispose();
     if (!merged) continue;
-    merged.computeBoundingBox();
-    merged.computeBoundingSphere();
+    merged.computeBoundingBox(); merged.computeBoundingSphere();
     const mesh = new THREE.Mesh(merged, material);
-    mesh.name = 'GIM_NATIVE_MERGED';
+    mesh.name = 'GIM_NATIVE_CBM_MERGED';
     mesh.frustumCulled = false;
-    root.add(mesh);
+    group.add(mesh);
   }
 }
 
@@ -943,7 +1104,8 @@ export async function alignNativeRootToLoadedIfc(ctx: ViewerContext, state: AppS
 function applyNativeRuntimeHints(root: THREE.Group): void {
   root.traverse((obj) => {
     if (!(obj instanceof THREE.Mesh)) return;
-    obj.frustumCulled = false;
+    // 已计算包围体，启用视锥裁剪可避免相机操作时绘制站区外的大量电气设备。
+    obj.frustumCulled = true;
     if (obj.geometry instanceof THREE.BufferGeometry) {
       obj.geometry.computeBoundingBox();
       obj.geometry.computeBoundingSphere();
@@ -956,6 +1118,7 @@ export function removePreviousNativeRoot(ctx: ViewerContext): void {
   const previous = scene.getObjectByName(ROOT_NAME);
   if (!previous) return;
   previous.removeFromParent();
+  document.getElementById(`model-${NATIVE_MODEL_ID}`)?.remove();
   previous.traverse((obj) => {
     if (obj instanceof THREE.Mesh) {
       obj.geometry.dispose();
@@ -985,6 +1148,8 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
   const devFiles = await pickRootDevFiles(files, allDevFiles);
   const phmFiles = listFiles(files, '.phm');
   const modFiles = listFiles(files, '.mod');
+  const stlFiles = listFiles(files, '.stl');
+  const svcFiles = listFiles(files, '.svc');
 
   const renderedFromCbm = await renderFromCbmIfPossible(renderCtx, root, options);
 
@@ -1003,15 +1168,54 @@ export async function renderNativeGimModel(ctx: ViewerContext, state: AppState, 
       await renderMod(renderCtx, path, group);
       offset += 2000;
     }
+    for (const path of stlFiles) {
+      const group = new THREE.Group();
+      group.position.x = offset;
+      root.add(group);
+      await renderStl(renderCtx, path, group);
+      offset += 2000;
+    }
+    for (const path of svcFiles) {
+      const group = new THREE.Group();
+      group.position.x = offset;
+      root.add(group);
+      await renderStl(renderCtx, path, group);
+      offset += 2000;
+    }
   }
 
   if (renderCtx.stats.meshCount === 0) return null;
   const coordinatedToIfc = options.coordinateWithIfc ? applyIfcBaseCoordinateTransform(ctx, root) : false;
-  const alignedToIfc = !coordinatedToIfc && options.alignToIfc !== false ? await alignNativeCbmGroupsToIfc(ctx, root, options.cbmFiles) : coordinatedToIfc;
-  optimizeNativeRoot(root);
-  applyNativeRuntimeHints(root);
+  let alignedToIfc = coordinatedToIfc;
+  if (!coordinatedToIfc && options.alignToIfc !== false) {
+    alignedToIfc = await alignNativeCbmGroupsToIfc(ctx, root, options.cbmFiles);
+    // 完整工程没有指定 CBM 子集时，退回到 IFC 场景整体包围盒对齐，避免原生一次设备整体飘离站区。
+    if (!alignedToIfc) alignedToIfc = await alignNativeRootToLoadedIfc(ctx, state, root, options.cbmFiles);
+  }
+  // Always optimize per CBM. Skipping this for large packages leaves thousands
+  // of Mesh/Material draw calls; uploading those at once can lose the WebGL
+  // context and blank both IFC and native geometry. The per-CBM vertex limit
+  // above bounds the temporary CPU memory used by each merge.
+  try {
+    optimizeCbmGroup(root);
+  } catch (error) {
+    console.warn('GIM 几何合并失败，保留已解析的原始设备网格:', error);
+  }
+  try {
+    applyNativeRuntimeHints(root);
+  } catch (error) {
+    console.warn('GIM 运行时包围体计算失败，继续显示已解析设备:', error);
+  }
   ((ctx.world.scene as any).three as THREE.Scene).add(root);
-  state.hasFittedCamera = false;
-  fitCameraToScene(ctx, state);
+  state.loadedMeshModels.set(NATIVE_MODEL_ID, { modelId: NATIVE_MODEL_ID, root, visible: true });
+  addModelToUI(ctx, state, NATIVE_MODEL_ID);
+  // IFC is framed before the native overlay starts. Do not fit the combined
+  // scene again: a single malformed/outlying electrical primitive can expand
+  // the global bounds by kilometres and make the valid station look blank.
+  // Native-only GIM packages still need an initial camera fit.
+  if (state.loadedModels.size === 0) {
+    state.hasFittedCamera = false;
+    fitCameraToScene(ctx, state);
+  }
   return { group: root, alignedToIfc, ...renderCtx.stats };
 }
