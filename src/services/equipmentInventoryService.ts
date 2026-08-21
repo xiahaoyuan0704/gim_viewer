@@ -146,11 +146,12 @@ function shouldKeepDefaultParameter(label: string, value: string): boolean {
   return !/文件|FAMILY|BASEFAMILY|REF|PATH/i.test(label);
 }
 
-async function collectDefaultProperties(
+async function collectFamSectionProperties(
   files: Map<string, File>,
   famRef: string | undefined,
   dirs: string[],
   textCache: WeakMap<File, Promise<string>>,
+  sectionName: string,
   visited = new Set<string>(),
 ): Promise<DefaultProperty[]> {
   const resolved = resolveFile(files, famRef, dirs);
@@ -158,8 +159,11 @@ async function collectDefaultProperties(
   visited.add(resolved.path.toLowerCase());
   const text = await getFileText(resolved.file, textCache);
   const kv = parseKeyValue(text);
-  const inherited = kv.BASEFAMILY ? await collectDefaultProperties(files, kv.BASEFAMILY, dirs, textCache, visited) : [];
-  const section = parseFamSections(text).get('默认');
+  const inherited = kv.BASEFAMILY
+    ? await collectFamSectionProperties(files, kv.BASEFAMILY, dirs, textCache, sectionName, visited)
+    : [];
+  const sections = parseFamSections(text);
+  const section = Array.from(sections).find(([name]) => name.trim() === sectionName)?.[1];
   const own: DefaultProperty[] = [];
   if (section) {
     for (const [key, raw] of section) {
@@ -179,13 +183,18 @@ function getFileText(file: File, cache: WeakMap<File, Promise<string>>): Promise
   return text;
 }
 
-async function collectNodeDefaultProperties(node: CbmNode, files: Map<string, File>, textCache: WeakMap<File, Promise<string>>): Promise<DefaultProperty[]> {
+async function collectNodeSectionProperties(
+  node: CbmNode,
+  files: Map<string, File>,
+  textCache: WeakMap<File, Promise<string>>,
+  sectionName: string,
+): Promise<DefaultProperty[]> {
   const properties: DefaultProperty[] = [];
-  properties.push(...await collectDefaultProperties(files, node.famPath, ['CBM', 'FAM'], textCache));
+  properties.push(...await collectFamSectionProperties(files, node.famPath, ['CBM', 'FAM'], textCache, sectionName));
   const devFile = resolveFile(files, node.devPath, ['DEV']);
   if (devFile) {
     const dev = parseKeyValue(await getFileText(devFile.file, textCache));
-    properties.push(...await collectDefaultProperties(files, dev.BASEFAMILY, ['DEV', 'FAM', 'CBM'], textCache));
+    properties.push(...await collectFamSectionProperties(files, dev.BASEFAMILY, ['DEV', 'FAM', 'CBM'], textCache, sectionName));
   }
   const seen = new Set<string>();
   return properties.filter((property) => {
@@ -206,7 +215,7 @@ async function collectEquipmentContext(
   primaryDev: Record<string, string>;
   matchParts: string[];
 }> {
-  // 第四层级可能只保存组织信息，真正的默认参数位于直属第五层级，
+  // 第四层级可能只保存组织信息，真正的设计参数位于直属第五层级，
   // 因此分类和明细属性要同时读取设备本身及其所有直属子设备。
   const members = [node, ...node.children];
   const properties: DefaultProperty[] = [];
@@ -215,12 +224,14 @@ async function collectEquipmentContext(
   const primaryMatchParts = [node.name, node.classifyName, node.entityName];
   const childMatchParts: string[] = [];
   for (const member of members) {
-    const memberProperties = await collectNodeDefaultProperties(member, files, textCache);
-    properties.push(...memberProperties);
-    if (member === node) primaryProperties = memberProperties;
+    const defaultProperties = await collectNodeSectionProperties(member, files, textCache, '默认');
+    const designProperties = await collectNodeSectionProperties(member, files, textCache, '设计参数');
+    // Excel 明细页只输出属性面板“设计参数”卡片中已经解析出的内容。
+    properties.push(...designProperties);
+    if (member === node) primaryProperties = [...defaultProperties, ...designProperties];
     const target = member === node ? primaryMatchParts : childMatchParts;
     target.push(member.name, member.classifyName, member.entityName);
-    target.push(...memberProperties.flatMap(({ label, value }) => [label, value]));
+    target.push(...[...defaultProperties, ...designProperties].flatMap(({ label, value }) => [label, value]));
     const devFile = resolveFile(files, member.devPath, ['DEV']);
     if (devFile) {
       const dev = parseKeyValue(await getFileText(devFile.file, textCache));
