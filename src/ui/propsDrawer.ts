@@ -14,17 +14,25 @@ function refreshViewportLayout(ctx: ViewerContext) {
   });
 }
 
+function syncPropsTogglePosition(): void {
+  requestAnimationFrame(() => {
+    btnToggleProps.style.right = propsDrawer.classList.contains('collapsed')
+      ? '12px'
+      : `${propsDrawer.getBoundingClientRect().width + 14}px`;
+  });
+}
+
 /** 打开属性面板 */
 export function openPropsDrawer(ctx: ViewerContext): void {
   propsDrawer.classList.remove('collapsed');
-  btnToggleProps.style.right = '332px';
+  syncPropsTogglePosition();
   refreshViewportLayout(ctx);
 }
 
 /** 关闭属性面板 */
 export function closePropsDrawer(ctx: ViewerContext): void {
   propsDrawer.classList.add('collapsed');
-  btnToggleProps.style.right = '12px';
+  syncPropsTogglePosition();
   refreshViewportLayout(ctx);
 }
 

@@ -20,13 +20,15 @@
         --accent-soft: rgba(255, 255, 255, .12);
         --blue: #bdbdbd;
         --shadow: 0 18px 42px rgba(0, 0, 0, .28);
+        --sidebar-width: 316px;
+        --props-width: 336px;
       }
       * { box-sizing: border-box; }
       html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--canvas); font-family: Inter, "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
       button, input { font: inherit; }
       #app { display: flex; width: 100%; height: 100%; overflow: hidden; background: var(--canvas); }
 
-      #sidebar { width: 316px; flex-shrink: 0; color: var(--text); background: linear-gradient(160deg, #171717 0%, #0b0b0b 100%); display: flex; flex-direction: column; border-right: 1px solid var(--border); box-shadow: 10px 0 30px rgba(12, 26, 43, .06); z-index: 2; }
+      #sidebar { width: var(--sidebar-width); flex: 0 0 var(--sidebar-width); color: var(--text); background: linear-gradient(160deg, #171717 0%, #0b0b0b 100%); display: flex; flex-direction: column; border-right: 1px solid var(--border); box-shadow: 10px 0 30px rgba(12, 26, 43, .06); z-index: 2; }
       #sidebar header { padding: 26px 22px 20px; border-bottom: 1px solid var(--border); }
       #sidebar h1 { display: flex; align-items: center; gap: 10px; margin: 0 0 7px; font-size: 20px; font-weight: 650; letter-spacing: .01em; }
       #sidebar h1::before { content: ""; width: 29px; height: 29px; flex: 0 0 29px; border-radius: 9px; background: linear-gradient(135deg, var(--accent), #9a9a9a); box-shadow: 0 6px 14px rgba(255, 255, 255, .16); }
@@ -100,7 +102,7 @@
       #empty-tip h2 { margin: 0 0 8px; color: #333; font-size: 22px; font-weight: 650; letter-spacing: .01em; }
       #empty-tip p { margin: 0; font-size: 13px; color: #666; }
 
-      #props-drawer { flex: 0 0 336px; width: 336px; min-width: 0; flex-shrink: 0; color: var(--text); background: linear-gradient(160deg, #171717, #0b0b0b); display: flex; flex-direction: column; border-left: 1px solid var(--border); box-shadow: -10px 0 30px rgba(12, 26, 43, .06); transition: flex-basis .25s ease, width .25s ease; overflow: hidden; z-index: 2; }
+      #props-drawer { flex: 0 0 var(--props-width); width: var(--props-width); min-width: 0; color: var(--text); background: linear-gradient(160deg, #171717, #0b0b0b); display: flex; flex-direction: column; border-left: 1px solid var(--border); box-shadow: -10px 0 30px rgba(12, 26, 43, .06); transition: flex-basis .25s ease, width .25s ease; overflow: hidden; z-index: 2; }
       #props-drawer.collapsed { flex-basis: 0; width: 0; border-left: none; }
       #props-drawer-header { display: flex; align-items: center; justify-content: space-between; min-height: 68px; padding: 16px 17px 16px 20px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
       #props-drawer-header h3 { margin: 0; font-size: 14px; font-weight: 650; color: #f5f5f5; }
@@ -118,6 +120,15 @@
       .props-table .prop-val { color: #eee; word-break: break-all; }
       #btn-toggle-props { position: fixed; top: 22px; right: 350px; z-index: 9999; width: 38px; height: 38px; border: 1px solid rgba(15, 43, 62, .12); border-radius: 10px; background: rgba(255,255,255,.86); color: #333; font-size: 17px; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 20px rgba(24, 60, 84, .12); backdrop-filter: blur(10px); transition: background .2s, color .2s, right .25s ease, transform .2s; }
       #btn-toggle-props:hover { background: #111; color: #fff; transform: translateY(-1px); }
+
+      .panel-resizer { position: relative; flex: 0 0 7px; width: 7px; margin: 0 -3px; z-index: 30; cursor: col-resize; touch-action: none; }
+      .panel-resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent; transition: width .15s, left .15s, background .15s; }
+      .panel-resizer:hover::after, .panel-resizer.dragging::after { left: 2px; width: 3px; background: rgba(255,255,255,.42); }
+      #sidebar-resizer { margin-left: -3px; }
+      #props-resizer { margin-right: -3px; }
+      #props-resizer:has(+ #props-drawer.collapsed) { display: none; }
+      body.panel-resizing { cursor: col-resize; user-select: none; }
+      body.panel-resizing #props-drawer { transition: none; }
 
       .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, .65); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); }
       .modal-overlay.open { display: flex; }
@@ -143,7 +154,7 @@
       #selection-menu.open { display: grid; gap: 2px; }
       .selection-menu-item { padding: 8px 10px; border: 0; border-radius: 5px; background: transparent; color: #eee; text-align: left; cursor: pointer; font-size: 12px; }
       .selection-menu-item:hover { background: #333; }
-      @media (max-width: 900px) { #sidebar { width: 270px; } #props-drawer { flex-basis: 290px; width: 290px; } #btn-toggle-props { right: 303px; } }
+      @media (max-width: 900px) { :root { --sidebar-width: 270px; --props-width: 290px; } #btn-toggle-props { right: 303px; } }
     </style>
   </head>
   <body>
@@ -181,6 +192,7 @@
           <div id="gim-header-panel"><div class="props-empty">打开 GIM 文件后显示文件头信息</div></div>
         </div>
       </aside>
+      <div id="sidebar-resizer" class="panel-resizer" role="separator" aria-label="调整左侧栏宽度" aria-orientation="vertical" title="拖动调整左侧栏宽度"></div>
 
       <!-- 中间视口 -->
       <div id="center">
@@ -193,6 +205,7 @@
       </div>
 
       <!-- 右侧属性面板 -->
+      <div id="props-resizer" class="panel-resizer" role="separator" aria-label="调整属性栏宽度" aria-orientation="vertical" title="拖动调整属性栏宽度"></div>
       <div id="props-drawer">
         <div id="props-drawer-header">
           <h3>属性</h3>

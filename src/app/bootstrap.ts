@@ -9,6 +9,7 @@ import { setupIfcSelectModal } from '../ui/ifcSelectModal.js';
 import { setupProjectScaleModal } from '../ui/projectScaleModal.js';
 import { setupEquipmentInventoryExport } from '../ui/equipmentInventoryExport.js';
 import { setupViewportActions } from '../ui/viewportActions.js';
+import { setupPanelResize } from '../ui/panelResize.js';
 import { setupOpenGimService, loadSelectedIfcFiles } from '../services/openGimService.js';
 import { setupOpenIfcService } from '../services/openIfcService.js';
 import { resetHighlight } from '../viewer/highlight.js';
@@ -44,6 +45,7 @@ async function bootstrapAsync(): Promise<void> {
   setupProjectScaleModal(state);
   setupEquipmentInventoryExport(state);
   setupViewportActions(ctx, state);
+  setupPanelResize(ctx);
   setupSelection(ctx, state, container, (modelId, localId) => {
     showIfcElementProperties(ctx, state, modelId, localId);
   }, (node) => {

@@ -19,61 +19,61 @@ export interface EquipmentParameterDetail {
 }
 
 type DefaultProperty = { label: string; value: string };
-type CatalogItem = { name: string; aliases?: string[] };
+type CatalogItem = { name: string; aliases?: string[]; englishNames: string[] };
 
 /** 附录 B 的 51 类电气设备；清单只允许输出这些类别。 */
 const ELECTRICAL_EQUIPMENT_CATALOG: CatalogItem[] = [
-  { name: '油浸式变压器' },
-  { name: '干式变压器' },
-  { name: '换流变压器' },
-  { name: '油浸式电抗器' },
-  { name: '干式电抗器' },
-  { name: '电磁式电流互感器', aliases: ['电流互感器'] },
-  { name: '电子式电流互感器' },
-  { name: '电磁式电压互感器' },
-  { name: '电容式电压互感器' },
-  { name: '电子式电压互感器' },
-  { name: '耦合电容器' },
-  { name: '直流电压测量装置' },
-  { name: '组合电器GIS', aliases: ['GIS组合电器', 'GIS设备', 'GIS'] },
-  { name: '组合电器HGIS', aliases: ['HGIS组合电器', 'HGIS设备', 'HGIS'] },
-  { name: '交流滤波器断路器', aliases: ['交流滤波器开关'] },
-  { name: '交流直流断路器', aliases: ['交直流断路器'] },
-  { name: '直流旁路开关' },
-  { name: '直流转换开关' },
-  { name: '交流隔离开关' },
-  { name: '交流接地开关' },
-  { name: '直流隔离开关' },
-  { name: '直流接地开关' },
-  { name: '换流阀' },
-  { name: '消弧线圈-接地变压器成套装置', aliases: ['消弧线圈', '接地变压器成套装置'] },
-  { name: '接地电阻成套装置' },
-  { name: '中性点成套设备', aliases: ['中性点成套装置'] },
-  { name: '隔直装置' },
-  { name: '框架式电容器组' },
-  { name: '集合式电容器组' },
-  { name: '串补电容器成套装置', aliases: ['串联补偿电容器成套装置'] },
-  { name: '降压式SVG' },
-  { name: '直挂式SVG' },
-  { name: 'SVC', aliases: ['静止无功补偿装置', '静止无功补偿器'] },
-  { name: '滤波器电容器' },
-  { name: '直流耦合电容器' },
-  { name: '电阻器' },
-  { name: '高压开关柜', aliases: ['主变柜', '出线柜', '进线柜', '电容器柜', '站用变柜', '10kV柜'] },
-  { name: '低压开关柜' },
-  { name: '熔断器' },
-  { name: '避雷器' },
-  { name: '直流避雷器-滤波避雷器', aliases: ['直流避雷器', '滤波避雷器'] },
-  { name: '交流支柱绝缘子' },
-  { name: '直流支柱绝缘子' },
-  { name: '交流穿墙套管', aliases: ['穿墙套管'] },
-  { name: '直流穿墙套管' },
-  { name: '二次屏柜', aliases: ['保护屏柜', '控制屏柜', '保护屏', '控制屏', 'UPS电源屏', '电源屏'] },
-  { name: '线路故障测量装置' },
-  { name: '蓄电池组' },
-  { name: '预制舱体' },
-  { name: '安防设备' },
-  { name: '火灾报警设备' },
+  { name: '油浸式变压器', englishNames: ['OilImmersedTransformer'] },
+  { name: '干式变压器', englishNames: ['DryTypeTransformer'] },
+  { name: '换流变压器', englishNames: ['ConverterTransformer'] },
+  { name: '油浸式电抗器', englishNames: ['OilImmersedReactor'] },
+  { name: '干式电抗器', englishNames: ['DryTypeReactor'] },
+  { name: '电磁式电流互感器', aliases: ['电流互感器'], englishNames: ['ElectromagneticCT', 'ElectromagneticCTa'] },
+  { name: '电子式电流互感器', englishNames: ['ElectronicCT', 'ElectronicCTa'] },
+  { name: '电磁式电压互感器', englishNames: ['ElectromagneticTV'] },
+  { name: '电容式电压互感器', englishNames: ['CapacitiveTV'] },
+  { name: '电子式电压互感器', englishNames: ['ElectronicTV'] },
+  { name: '耦合电容器', englishNames: ['CouplingCapacitor'] },
+  { name: '直流电压测量装置', englishNames: ['VoltageMeasuringDevice'] },
+  { name: '组合电器GIS', aliases: ['GIS组合电器', 'GIS设备', 'GIS'], englishNames: ['GIS'] },
+  { name: '组合电器HGIS', aliases: ['HGIS组合电器', 'HGIS设备', 'HGIS'], englishNames: ['HGIS'] },
+  { name: '交流滤波器断路器', aliases: ['交流滤波器开关'], englishNames: ['ACProcelainCircuitBreaker', 'ACPorcelainCircuitBreaker'] },
+  { name: '交流直流断路器', aliases: ['交直流断路器'], englishNames: ['ACTankBreaker'] },
+  { name: '直流旁路开关', englishNames: ['DCBypassSwitch'] },
+  { name: '直流转换开关', englishNames: ['DCConversionSwitch'] },
+  { name: '交流隔离开关', englishNames: ['ACIsolatingSwitch'] },
+  { name: '交流接地开关', englishNames: ['ACGroundSwitch'] },
+  { name: '直流隔离开关', englishNames: ['DCIsolatingSwitch'] },
+  { name: '直流接地开关', englishNames: ['DCGroundSwitch'] },
+  { name: '换流阀', englishNames: ['ConverterValve', 'InsulatedGateBipolarTransistor'] },
+  { name: '消弧线圈-接地变压器成套装置', aliases: ['消弧线圈', '接地变压器成套装置'], englishNames: ['GroundTransformer', 'ArcExtinguishingCoil'] },
+  { name: '接地电阻成套装置', englishNames: ['GroundResistance'] },
+  { name: '中性点成套设备', aliases: ['中性点成套装置'], englishNames: ['OpenGroundingEquipment', 'NeutralPointEquipment'] },
+  { name: '隔直装置', englishNames: ['DCBlockingDevice'] },
+  { name: '框架式电容器组', englishNames: ['FrameCapacitor'] },
+  { name: '集合式电容器组', englishNames: ['CollectiveCapacitor'] },
+  { name: '串补电容器成套装置', aliases: ['串联补偿电容器成套装置'], englishNames: ['SeriesCompensation'] },
+  { name: '降压式SVG', englishNames: ['BuckSVG'] },
+  { name: '直挂式SVG', englishNames: ['StraightHangingSVG'] },
+  { name: 'SVC', aliases: ['静止无功补偿装置', '静止无功补偿器'], englishNames: ['SVC'] },
+  { name: '滤波器电容器', englishNames: ['FilterCapacitor'] },
+  { name: '直流耦合电容器', englishNames: ['DCCouplingCapacitor'] },
+  { name: '电阻器', englishNames: ['Resistor'] },
+  { name: '高压开关柜', aliases: ['主变柜', '出线柜', '进线柜', '电容器柜', '站用变柜', '10kV柜'], englishNames: ['HVSwitchCabinet'] },
+  { name: '低压开关柜', englishNames: ['LVSwitchCabinet'] },
+  { name: '熔断器', englishNames: ['Fuse'] },
+  { name: '避雷器', englishNames: ['LightningArrester'] },
+  { name: '直流避雷器-滤波避雷器', aliases: ['直流避雷器', '滤波避雷器'], englishNames: ['DCArrester', 'FilterArrester'] },
+  { name: '交流支柱绝缘子', englishNames: ['ACPillarInsulator'] },
+  { name: '直流支柱绝缘子', englishNames: ['DCPillarInsulator'] },
+  { name: '交流穿墙套管', aliases: ['穿墙套管'], englishNames: ['ACWallBushing'] },
+  { name: '直流穿墙套管', englishNames: ['DCWallBushing'] },
+  { name: '二次屏柜', aliases: ['保护屏柜', '控制屏柜', '保护屏', '控制屏', 'UPS电源屏', '电源屏'], englishNames: ['SecondaryCabinet'] },
+  { name: '线路故障测量装置', englishNames: ['LineWarningMeasuringDevice'] },
+  { name: '蓄电池组', englishNames: ['GroupBattery'] },
+  { name: '预制舱体', englishNames: ['PrefabricatedCabin'] },
+  { name: '安防设备', englishNames: ['SecuritySystem'] },
+  { name: '火灾报警设备', englishNames: ['FireAlarmSystem'] },
 ];
 
 const inventoryCache = new WeakMap<Map<string, File>, Promise<EquipmentInventoryRow[]>>();
@@ -85,6 +85,20 @@ function normalizeMatchText(value: string): string {
 /** 名称允许存在电压、厂家、型号等前后缀，以最长命中的标准类别为准。 */
 function findElectricalCatalogIndex(parts: string[]): number | null {
   const searchable = normalizeMatchText(parts.join(' '));
+  // 规范给出的英文名称是稳定标识，优先级高于中文工程名称的模糊匹配。
+  let englishIndex = -1;
+  let englishLength = 0;
+  ELECTRICAL_EQUIPMENT_CATALOG.forEach((item, index) => {
+    for (const englishName of item.englishNames) {
+      const token = normalizeMatchText(englishName);
+      if (token && searchable.includes(token) && token.length > englishLength) {
+        englishIndex = index;
+        englishLength = token.length;
+      }
+    }
+  });
+  if (englishIndex >= 0) return englishIndex;
+
   let bestIndex = -1;
   let bestLength = 0;
   ELECTRICAL_EQUIPMENT_CATALOG.forEach((item, index) => {
