@@ -1,3 +1,5 @@
+import type { GimHeaderInfo } from './types.js';
+
 let archiveInitialized = false;
 
 async function getArchive() {
@@ -9,20 +11,57 @@ async function getArchive() {
   return mod.Archive;
 }
 
-/** 在 ArrayBuffer 中搜索 7z 或 ZIP 签名的偏移量 */
+/** GIM 固定长度头部布局（单位：字节）。 */
+const GIM_HEADER_LAYOUT = [
+  ['文件标识', 16], ['文件名称', 256], ['文件编辑者', 64], ['文件编辑单位', 256],
+  ['软件名称', 128], ['创建时间', 16], ['软件主版本号', 8], ['软件次版本号', 8],
+  ['标准主版本号', 8], ['标准次版本号', 8], ['存储域大小', 16],
+] as const;
+const GIM_SIGNATURES = new Set(['GIMPKGS', 'GIMPKGT', 'GIMPKEC']);
+
+function readHeaderText(bytes: Uint8Array): string {
+  const decode = (encoding: string) => new TextDecoder(encoding, { fatal: false }).decode(bytes)
+    .replace(/\0/g, '').trim();
+  const utf8 = decode('utf-8');
+  // 工程文件常用 UTF-8；对于旧版 GBK 头部，在 UTF-8 产生替换字符时回退。
+  return utf8.includes('�') ? decode('gbk') : utf8;
+}
+
+function getGimSignature(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  return readHeaderText(bytes.slice(0, 16)).slice(0, 7);
+}
+
+/** 在 ArrayBuffer 中搜索 7z 或 ZIP 签名的偏移量。 */
 export function findArchiveOffset(buffer: ArrayBuffer): number {
   const v = new Uint8Array(buffer);
-  if (v.length < 8) return 0;
-  if (String.fromCharCode(...v.slice(0, 7)) !== 'GIMPKGS') return 0;
-  // 搜索 7z 签名
-  for (let i = 7; i < Math.min(v.length, 4096) - 5; i++) {
+  if (v.length < 8 || !GIM_SIGNATURES.has(getGimSignature(buffer))) return 0;
+  // 标准文件的压缩数据紧随 784 字节固定头部；历史 GIM 文件则存在短头部或额外填充。
+  // 因此从文件标识之后开始查找，保证旧版已能解析的工程包不会因头部显示功能失效。
+  const limit = Math.min(v.length, 64 * 1024);
+  for (let i = 7; i < limit - 5; i++) {
     if (v[i] === 0x37 && v[i + 1] === 0x7a && v[i + 2] === 0xbc && v[i + 3] === 0xaf && v[i + 4] === 0x27 && v[i + 5] === 0x1c) return i;
-  }
-  // 搜索 ZIP 签名
-  for (let i = 7; i < Math.min(v.length, 4096) - 3; i++) {
     if (v[i] === 0x50 && v[i + 1] === 0x4b && v[i + 2] === 0x03 && v[i + 3] === 0x04) return i;
   }
   return 0;
+}
+
+/** 按 GIM 标准的固定字段布局读取 GIM 文件头。 */
+export function parseGimHeader(arrayBuffer: ArrayBuffer, selectedFileName: string): GimHeaderInfo {
+  const bytes = new Uint8Array(arrayBuffer);
+  const signature = getGimSignature(arrayBuffer);
+  const hasGimHeader = GIM_SIGNATURES.has(signature);
+  const archiveOffset = findArchiveOffset(arrayBuffer);
+  const archiveSignature = archiveOffset > 0 ? bytes.slice(archiveOffset, archiveOffset + 6) : new Uint8Array();
+  const archiveFormat = archiveSignature[0] === 0x37 && archiveSignature[1] === 0x7a ? '7z' : archiveSignature[0] === 0x50 && archiveSignature[1] === 0x4b ? 'ZIP' : '未知';
+  const fields: Array<{ key: string; value: string }> = [];
+  let offset = 0;
+  for (const [key, size] of GIM_HEADER_LAYOUT) {
+    const value = bytes.length >= offset + size ? readHeaderText(bytes.slice(offset, offset + size)) : '';
+    fields.push({ key, value: key === '文件名称' ? value || selectedFileName : value || '—' });
+    offset += size;
+  }
+  return { fileName: selectedFileName, fileSize: bytes.byteLength, hasGimHeader, archiveOffset, archiveFormat, fields };
 }
 
 /** 将 libarchive.js 解压结果展平为 Map<path, File> */

@@ -14,6 +14,9 @@ export const propsDrawerBody = document.getElementById('props-drawer-body') as H
 export const propsDrawer = document.getElementById('props-drawer') as HTMLElement;
 export const btnToggleProps = document.getElementById('btn-toggle-props') as HTMLButtonElement;
 export const btnCloseProps = document.getElementById('btn-close-props') as HTMLButtonElement;
+export const sidebar = document.getElementById('sidebar') as HTMLElement;
+export const sidebarResizer = document.getElementById('sidebar-resizer') as HTMLElement;
+export const propsResizer = document.getElementById('props-resizer') as HTMLElement;
 
 // 模态框
 export const ifcModal = document.getElementById('ifc-modal') as HTMLElement;

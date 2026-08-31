@@ -7,6 +7,7 @@ export interface ViewerContext {
   world: OBC.World;
   ifcLoader: OBC.IfcLoader;
   fragments: OBC.FragmentsManager;
+  grid: THREE.Object3D;
 }
 
 /** 初始化 OBC 引擎并返回上下文 */
@@ -33,10 +34,10 @@ export function createViewerEngine(container: HTMLElement): ViewerContext {
     controls.infinityDolly = true;
   }
   components.init();
-  components.get(OBC.Grids).create(world);
+  const grid = components.get(OBC.Grids).create(world) as any;
 
   const ifcLoader = components.get(OBC.IfcLoader);
   const fragments = components.get(OBC.FragmentsManager);
 
-  return { components, world, ifcLoader, fragments };
+  return { components, world, ifcLoader, fragments, grid: (grid.three || grid) as THREE.Object3D };
 }
